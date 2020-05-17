@@ -266,6 +266,94 @@ fn encode_png(
     Ok(())
 }
 
+fn get_ppi_from_png_metadata(
+    image_filepath: &str,
+    png_metadata: &HashMap<String, Vec<u8>>,
+) -> Option<f64> {
+    if let Some(metadata) = png_metadata.get("pHYs") {
+        let info = {
+            let mut deserializer = ct_lib::bincode::config();
+            deserializer.big_endian();
+            let info = deserializer
+                .deserialize::<PngPhys>(metadata)
+                .expect(&format!(
+                    "Could not read DPI metadata from '{}'",
+                    &image_filepath
+                ));
+
+            info
+        };
+
+        assert_eq!(
+            info.unit_is_meter, 1,
+            "Physical unit of image '{}' seems to be wrong, please re-export image",
+            image_filepath,
+        );
+
+        let ppi_x = pixel_per_meter_in_pixel_per_inch(info.pixel_per_unit_x as f64);
+        let ppi_y = pixel_per_meter_in_pixel_per_inch(info.pixel_per_unit_y as f64);
+        assert_eq!(
+            info.pixel_per_unit_x, info.pixel_per_unit_y,
+            "Horizontal and Vertical DPI of image '{}' do not match: {:.2}x{:.2}",
+            image_filepath, ppi_x, ppi_y
+        );
+
+        let ppi = ppi_x;
+        assert!(
+            f64::abs(ppi - 300.0) < 0.1,
+            "Expected and DPI of image '{}' to be 300 but got {:.2}",
+            image_filepath,
+            ppi
+        );
+
+        Some(ppi)
+    } else {
+        None
+    }
+}
+
+fn create_pattern_png(
+    image_filepath: &str,
+    image: &Bitmap,
+    png_metadata: &HashMap<String, Vec<u8>>,
+    repeat_count_x: i32,
+    repeat_count_y: i32,
+) {
+    let result_pixel_width = image.width * repeat_count_x;
+    let result_pixel_height = image.height * repeat_count_y;
+    let mut result_image = Bitmap::new(result_pixel_width as u32, result_pixel_height as u32);
+
+    {
+        let _timer = ct_lib::TimerScoped::new_scoped("Compositing", false);
+
+        let chunk_size = 4 * 1024 * 1024;
+        let result_image_width = result_image.width;
+        result_image
+            .data
+            .par_chunks_mut(chunk_size)
+            .enumerate()
+            .for_each(|(chunk_index, chunk)| {
+                let start_index = chunk_index * chunk_size;
+                copy_pixels(&image, result_image_width, chunk, start_index);
+            });
+    }
+
+    {
+        let _timer = ct_lib::TimerScoped::new_scoped("Writing", false);
+        Bitmap::write_to_png_file(&result_image, "output.png");
+
+        let png_output_filepath = get_image_output_filepath(
+            &image_filepath,
+            &format!("__{}x{}", repeat_count_x, repeat_count_y),
+        );
+        let png_output_filepath = "output.png";
+        encode_png(&result_image, &png_output_filepath, &png_metadata).expect(&format!(
+            "Could not write png file to '{}'",
+            png_output_filepath
+        ));
+    }
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Main
 
@@ -317,89 +405,8 @@ fn main() {
 
     RepeatyGui::run(Settings::default());
 
-    let image_filepath = get_image_filepath_from_commandline();
-    let image = load_bitmap(&image_filepath);
-    let png_metadata = png_extract_chunks_to_copy(&image_filepath);
-    let ppi = {
-        if let Some(metadata) = png_metadata.get("pHYs") {
-            let info = {
-                let mut deserializer = ct_lib::bincode::config();
-                deserializer.big_endian();
-                let info = deserializer
-                    .deserialize::<PngPhys>(metadata)
-                    .expect(&format!(
-                        "Could not read DPI metadata from '{}'",
-                        &image_filepath
-                    ));
-
-                info
-            };
-
-            assert_eq!(
-                info.unit_is_meter, 1,
-                "Physical unit of image '{}' seems to be wrong, please re-export image",
-                image_filepath,
-            );
-
-            let ppi_x = pixel_per_meter_in_pixel_per_inch(info.pixel_per_unit_x as f64);
-            let ppi_y = pixel_per_meter_in_pixel_per_inch(info.pixel_per_unit_y as f64);
-            assert_eq!(
-                info.pixel_per_unit_x, info.pixel_per_unit_y,
-                "Horizontal and Vertical DPI of image '{}' do not match: {:.2}x{:.2}",
-                image_filepath, ppi_x, ppi_y
-            );
-
-            let ppi = ppi_x;
-            assert!(
-                f64::abs(ppi - 300.0) < 0.1,
-                "Expected and DPI of image '{}' to be 300 but got {:.2}",
-                image_filepath,
-                ppi
-            );
-
-            Some(ppi)
-        } else {
-            None
-        }
-    };
-
     let repeat_count_x = 1;
     let repeat_count_y = 1;
-
-    let result_pixel_width = image.width * repeat_count_x;
-    let result_pixel_height = image.height * repeat_count_y;
-
-    let mut result_image = Bitmap::new(result_pixel_width as u32, result_pixel_height as u32);
-
-    {
-        let _timer = ct_lib::TimerScoped::new_scoped("Compositing", false);
-
-        let chunk_size = 4 * 1024 * 1024;
-        let result_image_width = result_image.width;
-        result_image
-            .data
-            .par_chunks_mut(chunk_size)
-            .enumerate()
-            .for_each(|(chunk_index, chunk)| {
-                let start_index = chunk_index * chunk_size;
-                copy_pixels(&image, result_image_width, chunk, start_index);
-            });
-    }
-
-    {
-        let _timer = ct_lib::TimerScoped::new_scoped("Writing", false);
-        Bitmap::write_to_png_file(&result_image, "output.png");
-
-        let png_output_filepath = get_image_output_filepath(
-            &image_filepath,
-            &format!("__{}x{}", repeat_count_x, repeat_count_y),
-        );
-        let png_output_filepath = "output.png";
-        encode_png(&result_image, &png_output_filepath, &png_metadata).expect(&format!(
-            "Could not write png file to '{}'",
-            png_output_filepath
-        ));
-    }
 
     let image_width_mm = show_messagebox(
         main_launcher_info::LAUNCHER_WINDOW_TITLE,
@@ -418,6 +425,8 @@ use iced::{
 
 #[derive(Default)]
 struct RepeatyGui {
+    image: Option<Image>,
+
     pixels_per_millimeter: f64,
     image_pixel_width: f64,
     image_pixel_height: f64,
@@ -428,25 +437,28 @@ struct RepeatyGui {
     dim_x: f64,
     dim_y: f64,
 
-    repeat_x_widget: text_input::State,
-    repeat_y_widget: text_input::State,
-
-    dim_x_widget: text_input::State,
-    dim_y_widget: text_input::State,
-
     repeat_x_text: String,
     repeat_y_text: String,
 
     dim_x_text: String,
     dim_y_text: String,
+
+    start_button_widget: button::State,
+
+    repeat_x_widget: text_input::State,
+    repeat_y_widget: text_input::State,
+
+    dim_x_widget: text_input::State,
+    dim_y_widget: text_input::State,
 }
 
 #[derive(Debug, Clone)]
-enum Message {
+enum GuiEvent {
     ChangedRepeatCountX(String),
     ChangedRepeatCountY(String),
     ChangedDimensionMillimeterX(String),
     ChangedDimensionMillimeterY(String),
+    PressedStartButton,
 }
 
 impl RepeatyGui {
@@ -487,15 +499,48 @@ fn get_label_size_and_color(text: &str) -> (iced::Color, u16) {
     }
     (COLOR_INVALID, LABEL_SIZE_INVALID)
 }
+fn get_ppi_label_size_and_color(ppi: f64) -> (iced::Color, u16) {
+    if (ppi - 300.0).abs() <= 0.1 {
+        (COLOR_DEFAULT, LABEL_SIZE_DEFAULT)
+    } else {
+        (COLOR_INVALID, LABEL_SIZE_INVALID)
+    }
+}
+
+struct Image {
+    filepath: String,
+    bitmap: Bitmap,
+    png_metadata: HashMap<String, Vec<u8>>,
+    ppi: Option<f64>,
+}
+
+impl Image {
+    fn new(filepath: &str) -> Image {
+        let bitmap = load_bitmap(&filepath);
+        let png_metadata = png_extract_chunks_to_copy(&filepath);
+        let ppi = get_ppi_from_png_metadata(&filepath, &png_metadata);
+        Image {
+            filepath: filepath.to_string(),
+            bitmap,
+            png_metadata,
+            ppi,
+        }
+    }
+}
 
 impl Sandbox for RepeatyGui {
-    type Message = Message;
+    type Message = GuiEvent;
 
     fn new() -> RepeatyGui {
+        let image_filepath = get_image_filepath_from_commandline();
+        let image = Image::new(&image_filepath);
+
         let mut result = RepeatyGui::default();
-        result.pixels_per_millimeter = pixel_per_inch_in_pixel_per_millimeter(300.0);
-        result.image_pixel_width = 100.0;
-        result.image_pixel_height = 100.0;
+        // result.pixels_per_millimeter =
+        //     pixel_per_inch_in_pixel_per_millimeter(image.ppi.unwrap_or(72.0));
+        // result.image_pixel_width = image.bitmap.width as f64;
+        // result.image_pixel_height = image.bitmap.height as f64;
+        // result.image = Some(image);
 
         result.set_repeat_count_x(5.0);
         result.set_repeat_count_y(5.0);
@@ -514,49 +559,54 @@ impl Sandbox for RepeatyGui {
 
     fn update(&mut self, message: Self::Message) {
         match message {
-            Message::ChangedRepeatCountX(value_str) => {
+            GuiEvent::ChangedRepeatCountX(value_str) => {
                 self.repeat_x_text = value_str;
                 if let Some(value) = self.repeat_x_text.parse::<f64>().ok() {
                     self.set_repeat_count_x(value);
                 }
             }
-            Message::ChangedRepeatCountY(value_str) => {
+            GuiEvent::ChangedRepeatCountY(value_str) => {
                 self.repeat_y_text = value_str;
                 if let Some(value) = self.repeat_y_text.parse::<f64>().ok() {
                     self.set_repeat_count_y(value);
                 }
             }
-            Message::ChangedDimensionMillimeterX(value_str) => {
+            GuiEvent::ChangedDimensionMillimeterX(value_str) => {
                 self.dim_x_text = value_str;
                 if let Some(value) = self.dim_x_text.parse::<f64>().ok() {
                     self.set_dimension_millimeter_x(value);
                 }
             }
-            Message::ChangedDimensionMillimeterY(value_str) => {
+            GuiEvent::ChangedDimensionMillimeterY(value_str) => {
                 self.dim_y_text = value_str;
                 if let Some(value) = self.dim_y_text.parse::<f64>().ok() {
                     self.set_dimension_millimeter_y(value);
                 }
             }
+            GuiEvent::PressedStartButton => todo!(),
         }
     }
 
     fn view(&mut self) -> Element<Self::Message> {
+        let (ppi_label_color, ppi_label_size) = get_ppi_label_size_and_color(
+            pixel_per_millimeter_in_pixel_per_inch(self.pixels_per_millimeter),
+        );
         let input_image_stats = Column::new()
             .padding(20)
             .align_items(Align::Center)
             .width(FillPortion(1))
             .push(
                 Text::new(format!(
-                    "Image pixels per inch: {}",
+                    "Image pixels per inch: {:.2}",
                     pixel_per_millimeter_in_pixel_per_inch(self.pixels_per_millimeter)
                 ))
-                .size(LABEL_SIZE_DEFAULT)
+                .size(ppi_label_size)
+                .color(ppi_label_color)
                 .width(FillPortion(1)),
             )
             .push(
                 Text::new(format!(
-                    "Image size (pixels): {}x{}",
+                    "Image size (pixels): {:.0}x{:.0}",
                     self.image_pixel_width, self.image_pixel_height
                 ))
                 .size(LABEL_SIZE_DEFAULT)
@@ -573,7 +623,7 @@ impl Sandbox for RepeatyGui {
                 &mut self.repeat_x_widget,
                 "",
                 &self.repeat_x_text,
-                Message::ChangedRepeatCountX,
+                GuiEvent::ChangedRepeatCountX,
             )
             .padding(15)
             .size(label_size)
@@ -596,7 +646,7 @@ impl Sandbox for RepeatyGui {
                 &mut self.repeat_y_widget,
                 "",
                 &self.repeat_y_text,
-                Message::ChangedRepeatCountY,
+                GuiEvent::ChangedRepeatCountY,
             )
             .padding(15)
             .size(label_size)
@@ -619,7 +669,7 @@ impl Sandbox for RepeatyGui {
                 &mut self.dim_x_widget,
                 "",
                 &self.dim_x_text,
-                Message::ChangedDimensionMillimeterX,
+                GuiEvent::ChangedDimensionMillimeterX,
             )
             .padding(15)
             .size(label_size)
@@ -641,7 +691,7 @@ impl Sandbox for RepeatyGui {
                 &mut self.dim_y_widget,
                 "",
                 &self.dim_y_text,
-                Message::ChangedDimensionMillimeterY,
+                GuiEvent::ChangedDimensionMillimeterY,
             )
             .padding(15)
             .size(label_size)
@@ -677,6 +727,10 @@ impl Sandbox for RepeatyGui {
                     .align_items(Align::Center)
                     .push(column_repeats)
                     .push(column_dimensions),
+            )
+            .push(
+                Button::new(&mut self.start_button_widget, Text::new("Create Pattern"))
+                    .on_press(GuiEvent::PressedStartButton),
             )
             .into()
     }
