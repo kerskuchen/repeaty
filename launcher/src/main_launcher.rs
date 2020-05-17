@@ -65,11 +65,12 @@ fn get_image_output_filepath(image_filepath: &str, image_suffix: &str) -> String
 }
 
 // NOTE: THIS IS FOR INTERNAL TESTING
-#[cfg(debug_assertions)]
+//#[cfg(debug_assertions)]
 fn get_image_filepath_from_commandline() -> String {
     "examples/nathan.png".to_string()
 }
 
+/*
 #[cfg(not(debug_assertions))]
 fn get_image_filepath_from_commandline() -> String {
     let mut args: Vec<String> = std::env::args().collect();
@@ -83,8 +84,9 @@ fn get_image_filepath_from_commandline() -> String {
         "Please drag and drop one image onto the executable"
     );
 
-    args
+    args.first().unwrap().to_string()
 }
+*/
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Low level bitmap helper function
@@ -333,8 +335,8 @@ fn main() {
         }
     };
 
-    let repeat_count_x = 3;
-    let repeat_count_y = 3;
+    let repeat_count_x = 10;
+    let repeat_count_y = 10;
 
     let result_pixel_width = image.width * repeat_count_x;
     let result_pixel_height = image.height * repeat_count_y;
@@ -371,5 +373,5 @@ fn main() {
         ));
     }
 
-    let image_width_mm = show_messagebox("Repeaty", "Finished creating patterns. Enjoy!", false);
+    let image_width_mm = show_messagebox("Repeaty", "Finished creating pattern. Enjoy!", false);
 }
