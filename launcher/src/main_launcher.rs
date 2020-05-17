@@ -18,6 +18,14 @@ mod main_launcher_info;
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Unit conversion
 
+fn millimeter_in_meter(millimeter: f64) -> f64 {
+    millimeter * (1.0 / 1000.0)
+}
+
+fn meter_in_millimeter(meter: f64) -> f64 {
+    meter * 1000.0
+}
+
 fn millimeter_in_inch(millimeter: f64) -> f64 {
     millimeter * (1.0 / 2.54)
 }
@@ -27,19 +35,35 @@ fn inch_in_millimeter(inch: f64) -> f64 {
 }
 
 fn meter_in_inch(meter: f64) -> f64 {
-    meter * (1.0 / 0.0254)
+    millimeter_in_inch(meter_in_millimeter(meter))
 }
 
 fn inch_in_meter(inch: f64) -> f64 {
-    inch * 0.0254
+    millimeter_in_meter(inch_in_millimeter(inch))
 }
 
-fn ppm_to_ppi(pixels_per_meter: f64) -> f64 {
-    pixels_per_meter * 0.0254
+fn pixel_per_millimeter_in_pixel_per_meter(pixels_per_millimeter: f64) -> f64 {
+    pixels_per_millimeter / millimeter_in_meter(1.0)
 }
 
-fn ppi_to_ppm(pixels_per_inch: f64) -> f64 {
-    pixels_per_inch * (1.0 / 0.0254)
+fn pixel_per_meter_in_pixel_per_millimeter(pixels_per_meter: f64) -> f64 {
+    pixels_per_meter / meter_in_millimeter(1.0)
+}
+
+fn pixel_per_meter_in_pixel_per_inch(pixels_per_meter: f64) -> f64 {
+    pixels_per_meter / meter_in_inch(1.0)
+}
+
+fn pixel_per_inch_in_pixel_per_meter(pixels_per_inch: f64) -> f64 {
+    pixels_per_inch / inch_in_meter(1.0)
+}
+
+fn pixel_per_millimeter_in_pixel_per_inch(pixels_per_millimeter: f64) -> f64 {
+    pixels_per_millimeter / millimeter_in_inch(1.0)
+}
+
+fn pixel_per_inch_in_pixel_per_millimeter(pixels_per_inch: f64) -> f64 {
+    pixels_per_inch / inch_in_millimeter(1.0)
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -291,6 +315,8 @@ fn set_panic_hook() {
 fn main() {
     set_panic_hook();
 
+    RepeatyGui::run(Settings::default());
+
     let image_filepath = get_image_filepath_from_commandline();
     let image = load_bitmap(&image_filepath);
     let png_metadata = png_extract_chunks_to_copy(&image_filepath);
@@ -315,8 +341,8 @@ fn main() {
                 image_filepath,
             );
 
-            let ppi_x = ppm_to_ppi(info.pixel_per_unit_x as f64);
-            let ppi_y = ppm_to_ppi(info.pixel_per_unit_y as f64);
+            let ppi_x = pixel_per_meter_in_pixel_per_inch(info.pixel_per_unit_x as f64);
+            let ppi_y = pixel_per_meter_in_pixel_per_inch(info.pixel_per_unit_y as f64);
             assert_eq!(
                 info.pixel_per_unit_x, info.pixel_per_unit_y,
                 "Horizontal and Vertical DPI of image '{}' do not match: {:.2}x{:.2}",
@@ -380,33 +406,105 @@ fn main() {
         "Finished creating pattern. Enjoy!",
         false,
     );
-
-    Hello::run(Settings::default())
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // GUI
 
-use iced::{button, Align, Button, Column, Element, Sandbox, Settings, Text};
+use iced::{
+    button, text_input, Align, Button, Column, Element, Length::FillPortion, Row, Sandbox,
+    Settings, Text, TextInput,
+};
 
 #[derive(Default)]
-struct Hello {
-    value: i32,
-    button_plus: button::State,
-    button_minus: button::State,
+struct RepeatyGui {
+    pixels_per_millimeter: f64,
+    image_pixel_width: f64,
+    image_pixel_height: f64,
+
+    repeat_x: f64,
+    repeat_y: f64,
+
+    dim_x: f64,
+    dim_y: f64,
+
+    repeat_x_widget: text_input::State,
+    repeat_y_widget: text_input::State,
+
+    dim_x_widget: text_input::State,
+    dim_y_widget: text_input::State,
+
+    repeat_x_text: String,
+    repeat_y_text: String,
+
+    dim_x_text: String,
+    dim_y_text: String,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Message {
-    PressedPlus,
-    PressedMinus,
+    ChangedRepeatCountX(String),
+    ChangedRepeatCountY(String),
+    ChangedDimensionMillimeterX(String),
+    ChangedDimensionMillimeterY(String),
+
+    SubmitRepeatCountX,
+    SubmitRepeatCountY,
+    SubmitDimensionMillimeterX,
+    SubmitDimensionMillimeterY,
 }
 
-impl Sandbox for Hello {
+impl RepeatyGui {
+    fn refresh_text(&mut self) {
+        self.repeat_x_text = self.repeat_x.to_string();
+        self.repeat_y_text = self.repeat_y.to_string();
+        self.dim_x_text = self.dim_x.to_string();
+        self.dim_y_text = self.dim_y.to_string();
+    }
+
+    fn set_repeat_count_x(&mut self, value: f64) {
+        self.repeat_x = value;
+        self.dim_x = self.repeat_x * self.image_pixel_width / self.pixels_per_millimeter;
+        self.refresh_text();
+    }
+
+    fn set_repeat_count_y(&mut self, value: f64) {
+        self.repeat_y = value;
+        self.dim_y = self.repeat_y * self.image_pixel_height / self.pixels_per_millimeter;
+        self.refresh_text();
+    }
+
+    fn set_dimension_millimeter_x(&mut self, value: f64) {
+        self.dim_x = value;
+        self.repeat_x = self.dim_x * self.pixels_per_millimeter / self.image_pixel_width;
+        self.refresh_text();
+    }
+
+    fn set_dimension_millimeter_y(&mut self, value: f64) {
+        self.dim_y = value;
+        self.repeat_y = self.dim_y * self.pixels_per_millimeter / self.image_pixel_height;
+        self.refresh_text();
+    }
+}
+
+impl Sandbox for RepeatyGui {
     type Message = Message;
 
-    fn new() -> Hello {
-        Hello::default()
+    fn new() -> RepeatyGui {
+        let mut result = RepeatyGui::default();
+        result.pixels_per_millimeter = pixel_per_inch_in_pixel_per_millimeter(300.0);
+        result.image_pixel_width = 100.0;
+        result.image_pixel_height = 100.0;
+
+        result.set_repeat_count_x(5.0);
+        result.set_repeat_count_y(5.0);
+
+        result.repeat_x_text = result.repeat_x.to_string();
+        result.repeat_y_text = result.repeat_y.to_string();
+        result.dim_x_text = result.dim_x.to_string();
+        result.dim_y_text = result.dim_y.to_string();
+
+        result
     }
 
     fn title(&self) -> String {
@@ -415,28 +513,181 @@ impl Sandbox for Hello {
 
     fn update(&mut self, message: Self::Message) {
         match message {
-            Message::PressedPlus => {
-                self.value += 1;
+            Message::ChangedRepeatCountX(value_str) => {
+                self.repeat_x_text = value_str;
             }
-            Message::PressedMinus => {
-                self.value -= 1;
+            Message::ChangedRepeatCountY(value_str) => {
+                self.repeat_y_text = value_str;
+            }
+            Message::ChangedDimensionMillimeterX(value_str) => {
+                self.dim_x_text = value_str;
+            }
+            Message::ChangedDimensionMillimeterY(value_str) => {
+                self.dim_y_text = value_str;
+            }
+            Message::SubmitRepeatCountX => {
+                if let Some(value) = self.repeat_x_text.parse::<f64>().ok() {
+                    self.set_repeat_count_x(value);
+                } else {
+                    self.repeat_x_text = self.repeat_x.to_string();
+                }
+            }
+            Message::SubmitRepeatCountY => {
+                if let Some(value) = self.repeat_y_text.parse::<f64>().ok() {
+                    self.set_repeat_count_y(value);
+                } else {
+                    self.repeat_y_text = self.repeat_y.to_string();
+                }
+            }
+            Message::SubmitDimensionMillimeterX => {
+                if let Some(value) = self.dim_x_text.parse::<f64>().ok() {
+                    self.set_dimension_millimeter_x(value);
+                } else {
+                    self.dim_x_text = self.dim_x.to_string();
+                }
+            }
+            Message::SubmitDimensionMillimeterY => {
+                if let Some(value) = self.dim_y_text.parse::<f64>().ok() {
+                    self.set_dimension_millimeter_y(value);
+                } else {
+                    self.dim_y_text = self.dim_y.to_string();
+                }
             }
         }
     }
 
     fn view(&mut self) -> Element<Self::Message> {
-        //Text::new("Hello, world!").into()
+        const LABEL_SIZE: u16 = 20;
+        let input_image_stats = Column::new()
+            .padding(20)
+            .align_items(Align::Center)
+            .width(FillPortion(1))
+            .push(
+                Text::new(format!(
+                    "Image pixels per inch: {}",
+                    pixel_per_millimeter_in_pixel_per_inch(self.pixels_per_millimeter)
+                ))
+                .size(LABEL_SIZE)
+                .width(FillPortion(1)),
+            )
+            .push(
+                Text::new(format!(
+                    "Image size (pixels): {}x{}",
+                    self.image_pixel_width, self.image_pixel_height
+                ))
+                .size(LABEL_SIZE)
+                .width(FillPortion(1)),
+            );
+
+        let repeat_count_x = {
+            let repeat_count_x_label = Text::new("Repeat horizontal: ")
+                .size(LABEL_SIZE)
+                .width(FillPortion(1));
+            let repeat_count_x_input = TextInput::new(
+                &mut self.repeat_x_widget,
+                "",
+                &self.repeat_x_text,
+                Message::ChangedRepeatCountX,
+            )
+            .on_submit(Message::SubmitRepeatCountX)
+            .padding(15)
+            .size(20)
+            .width(FillPortion(1));
+
+            Row::new()
+                .padding(20)
+                .align_items(Align::Center)
+                .push(repeat_count_x_label)
+                .push(repeat_count_x_input)
+        };
+        let repeat_count_y = {
+            let repeat_count_y_label = Text::new("Repeat vertical: ")
+                .size(LABEL_SIZE)
+                .width(FillPortion(1));
+            let repeat_count_y_input = TextInput::new(
+                &mut self.repeat_y_widget,
+                "",
+                &self.repeat_y_text,
+                Message::ChangedRepeatCountY,
+            )
+            .on_submit(Message::SubmitRepeatCountY)
+            .padding(15)
+            .size(20)
+            .width(FillPortion(1));
+
+            Row::new()
+                .padding(20)
+                .align_items(Align::Center)
+                .push(repeat_count_y_label)
+                .push(repeat_count_y_input)
+        };
+
+        let dimension_mm_x = {
+            let dimension_mm_x_label = Text::new("Image width (mm): ")
+                .size(LABEL_SIZE)
+                .width(FillPortion(1));
+            let dimension_mm_x_input = TextInput::new(
+                &mut self.dim_x_widget,
+                "",
+                &self.dim_x_text,
+                Message::ChangedDimensionMillimeterX,
+            )
+            .on_submit(Message::SubmitDimensionMillimeterX)
+            .padding(15)
+            .size(20)
+            .width(FillPortion(1));
+
+            Row::new()
+                .padding(20)
+                .align_items(Align::Center)
+                .push(dimension_mm_x_label)
+                .push(dimension_mm_x_input)
+        };
+        let dimension_mm_y = {
+            let dimension_mm_y_label = Text::new("Image height (mm): ")
+                .size(LABEL_SIZE)
+                .width(FillPortion(1));
+            let dimension_mm_y_input = TextInput::new(
+                &mut self.dim_y_widget,
+                "",
+                &self.dim_y_text,
+                Message::ChangedDimensionMillimeterY,
+            )
+            .on_submit(Message::SubmitDimensionMillimeterY)
+            .padding(15)
+            .size(20)
+            .width(FillPortion(1));
+
+            Row::new()
+                .padding(20)
+                .align_items(Align::Center)
+                .push(dimension_mm_y_label)
+                .push(dimension_mm_y_input)
+        };
+
+        let column_repeats = Column::new()
+            .padding(20)
+            .align_items(Align::Center)
+            .width(FillPortion(1))
+            .push(repeat_count_x)
+            .push(repeat_count_y);
+        let column_dimensions = Column::new()
+            .padding(20)
+            .align_items(Align::Center)
+            .width(FillPortion(1))
+            .push(dimension_mm_x)
+            .push(dimension_mm_y);
+
         Column::new()
             .padding(20)
             .align_items(Align::Center)
+            .push(input_image_stats)
             .push(
-                Button::new(&mut self.button_plus, Text::new("Increment"))
-                    .on_press(Message::PressedPlus),
-            )
-            .push(Text::new(self.value.to_string()).size(50))
-            .push(
-                Button::new(&mut self.button_minus, Text::new("Decrement"))
-                    .on_press(Message::PressedMinus),
+                Row::new()
+                    .padding(20)
+                    .align_items(Align::Center)
+                    .push(column_repeats)
+                    .push(column_dimensions),
             )
             .into()
     }
