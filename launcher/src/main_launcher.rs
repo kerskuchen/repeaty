@@ -4,14 +4,16 @@ use ct_lib::bitmap::*;
 use ct_lib::system;
 use ct_lib::system::PathHelper;
 
+use ct_lib::serde_derive::Deserialize;
+
 use gif::SetParameter;
 use mtpng;
 use rayon::prelude::*;
 use winapi;
 
-use ct_lib::serde_derive::Deserialize;
-
 use std::{collections::HashMap, fs::File};
+
+mod main_launcher_info;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Unit conversion
@@ -335,8 +337,8 @@ fn main() {
         }
     };
 
-    let repeat_count_x = 10;
-    let repeat_count_y = 10;
+    let repeat_count_x = 1;
+    let repeat_count_y = 1;
 
     let result_pixel_width = image.width * repeat_count_x;
     let result_pixel_height = image.height * repeat_count_y;
@@ -373,5 +375,69 @@ fn main() {
         ));
     }
 
-    let image_width_mm = show_messagebox("Repeaty", "Finished creating pattern. Enjoy!", false);
+    let image_width_mm = show_messagebox(
+        main_launcher_info::LAUNCHER_WINDOW_TITLE,
+        "Finished creating pattern. Enjoy!",
+        false,
+    );
+
+    Hello::run(Settings::default())
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// GUI
+
+use iced::{button, Align, Button, Column, Element, Sandbox, Settings, Text};
+
+#[derive(Default)]
+struct Hello {
+    value: i32,
+    button_plus: button::State,
+    button_minus: button::State,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    PressedPlus,
+    PressedMinus,
+}
+
+impl Sandbox for Hello {
+    type Message = Message;
+
+    fn new() -> Hello {
+        Hello::default()
+    }
+
+    fn title(&self) -> String {
+        String::from(main_launcher_info::LAUNCHER_WINDOW_TITLE)
+    }
+
+    fn update(&mut self, message: Self::Message) {
+        match message {
+            Message::PressedPlus => {
+                self.value += 1;
+            }
+            Message::PressedMinus => {
+                self.value -= 1;
+            }
+        }
+    }
+
+    fn view(&mut self) -> Element<Self::Message> {
+        //Text::new("Hello, world!").into()
+        Column::new()
+            .padding(20)
+            .align_items(Align::Center)
+            .push(
+                Button::new(&mut self.button_plus, Text::new("Increment"))
+                    .on_press(Message::PressedPlus),
+            )
+            .push(Text::new(self.value.to_string()).size(50))
+            .push(
+                Button::new(&mut self.button_minus, Text::new("Decrement"))
+                    .on_press(Message::PressedMinus),
+            )
+            .into()
+    }
 }
