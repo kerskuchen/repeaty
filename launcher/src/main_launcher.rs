@@ -676,10 +676,11 @@ impl Application for RepeatyGui {
                             output_image_pixel_height,
                         ) {
                             self.current_error = Some(error_message);
+                            self.process_state = ProcessState::Idle;
                         } else {
                             self.current_error = None;
+                            self.process_state = ProcessState::Finished;
                         }
-                        self.process_state = ProcessState::Finished;
                     }
                 }
             }
