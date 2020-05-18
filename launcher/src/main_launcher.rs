@@ -140,7 +140,8 @@ fn png_extract_chunks_to_copy(image_filepath: &str) -> Result<PngMetadataChunks,
             deserializer.big_endian();
             deserializer
                 .deserialize::<u32>(&file_bytes[chunk_begin_pos..])
-                .expect(&decoding_error_message) as usize
+                .map_err(|error| format!("{} : {}", &decoding_error_message, error))?
+                as usize
         };
         let chunk_complete_length = 4 + 4 + chunk_data_length + 4;
 
@@ -151,7 +152,7 @@ fn png_extract_chunks_to_copy(image_filepath: &str) -> Result<PngMetadataChunks,
 
         let chunk_type =
             std::str::from_utf8(&file_bytes[(chunk_begin_pos + 4)..(chunk_begin_pos + 8)])
-                .expect(&decoding_error_message);
+                .map_err(|error| format!("{} : {}", &decoding_error_message, error))?;
 
         let keep_chunk = match chunk_type {
             "cHRM" => true,
@@ -282,11 +283,11 @@ fn create_pattern_png(
     png_metadata: &PngMetadataChunks,
     result_pixel_width: i32,
     result_pixel_height: i32,
-) {
+) -> Result<(), String> {
     let mut result_image = Bitmap::new(result_pixel_width as u32, result_pixel_height as u32);
 
     {
-        let _timer = ct_lib::TimerScoped::new_scoped("Compositing", false);
+        let _timer = ct_lib::TimerScoped::new_scoped("Compositing", true);
 
         let chunk_size = 4 * 1024 * 1024;
         let result_image_width = result_image.width;
@@ -301,11 +302,13 @@ fn create_pattern_png(
     }
 
     {
-        let _timer = ct_lib::TimerScoped::new_scoped("Writing", false);
-        encode_png(&result_image, &png_output_filepath, &png_metadata).expect(&format!(
-            "Could not write png file to '{}'",
-            png_output_filepath
-        ));
+        let _timer = ct_lib::TimerScoped::new_scoped("Writing", true);
+        encode_png(&result_image, &png_output_filepath, &png_metadata).map_err(|error| {
+            format!(
+                "Could not write png file to '{}' : {}",
+                png_output_filepath, error
+            )
+        })
     }
 }
 
@@ -415,7 +418,7 @@ const COLOR_INVALID: iced::Color = iced::Color::from_rgb(1.0, 0.0, 0.0);
 
 fn get_label_size_and_color(text: &str) -> (iced::Color, u16) {
     if let Some(value) = text.parse::<f64>().ok() {
-        if value != 0.0 {
+        if value > 0.0 {
             return (COLOR_DEFAULT, LABEL_SIZE_DEFAULT);
         }
     }
@@ -524,15 +527,16 @@ impl RepeatyGui {
     }
 
     fn load_image(&mut self, image_filepath: &str) {
-        let image = Image::new(&image_filepath);
-        if let Err(error_message) = Image::new(&image_filepath) {
-            self.current_error = Some(error_message);
-            return;
-        } else {
+        let image = {
+            let image_result = Image::new(&image_filepath);
+            if let Err(error_message) = Image::new(&image_filepath) {
+                self.current_error = Some(error_message);
+                return;
+            }
             self.current_error = None;
-        }
+            image_result.unwrap()
+        };
 
-        let image = image.unwrap();
         self.input_image_pixels_per_millimeter =
             pixel_per_inch_in_pixel_per_millimeter(image.ppi.unwrap_or(72.0));
         self.input_image_pixel_width = image.bitmap.width as f64;
@@ -540,10 +544,10 @@ impl RepeatyGui {
 
         self.image = Some(image);
 
-        if self.repeat_x == 0.0
-            || self.repeat_y == 0.0
-            || self.dim_x == 0.0
-            || self.dim_y == 0.0
+        if self.repeat_x <= 0.0
+            || self.repeat_y <= 0.0
+            || self.dim_x <= 0.0
+            || self.dim_y <= 0.0
             || self.repeat_x.is_nan()
             || self.repeat_y.is_nan()
             || self.dim_x.is_nan()
@@ -638,27 +642,45 @@ impl Application for RepeatyGui {
             }
             GuiEvent::PressedStartButton => {
                 if let Some(image) = &self.image {
-                    self.process_state = ProcessState::Running;
+                    if self.repeat_x <= 0.0
+                        || self.repeat_y <= 0.0
+                        || self.dim_x <= 0.0
+                        || self.dim_y <= 0.0
+                        || self.repeat_x.is_nan()
+                        || self.repeat_y.is_nan()
+                        || self.dim_x.is_nan()
+                        || self.dim_y.is_nan()
+                    {
+                        self.current_error =
+                            Some("Some of the input values above are incorrect".to_string());
+                    } else {
+                        self.process_state = ProcessState::Running;
 
-                    let output_image_pixel_width = self.output_image_pixel_width.round() as i32;
-                    let output_image_pixel_height = self.output_image_pixel_height.round() as i32;
-                    let suffix_text = format!(
-                        "__{}x{}__{}x{}mm",
-                        pretty_print_float(self.repeat_x),
-                        pretty_print_float(self.repeat_y),
-                        pretty_print_float(self.dim_x),
-                        pretty_print_float(self.dim_y)
-                    );
-                    let png_output_filepath =
-                        get_image_output_filepath(&image.filepath, &suffix_text) + ".png";
-                    create_pattern_png(
-                        &png_output_filepath,
-                        &image.bitmap,
-                        &image.png_metadata,
-                        output_image_pixel_width,
-                        output_image_pixel_height,
-                    );
-                    self.process_state = ProcessState::Finished;
+                        let output_image_pixel_width = self.output_image_pixel_width.round() as i32;
+                        let output_image_pixel_height =
+                            self.output_image_pixel_height.round() as i32;
+                        let suffix_text = format!(
+                            "__{}x{}__{}x{}mm",
+                            pretty_print_float(self.repeat_x),
+                            pretty_print_float(self.repeat_y),
+                            pretty_print_float(self.dim_x),
+                            pretty_print_float(self.dim_y)
+                        );
+                        let png_output_filepath =
+                            get_image_output_filepath(&image.filepath, &suffix_text) + ".png";
+                        if let Err(error_message) = create_pattern_png(
+                            &png_output_filepath,
+                            &image.bitmap,
+                            &image.png_metadata,
+                            output_image_pixel_width,
+                            output_image_pixel_height,
+                        ) {
+                            self.current_error = Some(error_message);
+                        } else {
+                            self.current_error = None;
+                        }
+                        self.process_state = ProcessState::Finished;
+                    }
                 }
             }
             GuiEvent::WindowEvent(window_event) => match window_event {
