@@ -313,12 +313,11 @@ fn get_ppi_from_png_metadata(
 }
 
 fn create_pattern_png(
-    image_filepath: &str,
+    png_output_filepath: &str,
     image: &Bitmap,
     png_metadata: &HashMap<String, Vec<u8>>,
     result_pixel_width: i32,
     result_pixel_height: i32,
-    suffix_text: &str,
 ) {
     let mut result_image = Bitmap::new(result_pixel_width as u32, result_pixel_height as u32);
 
@@ -339,7 +338,6 @@ fn create_pattern_png(
 
     {
         let _timer = ct_lib::TimerScoped::new_scoped("Writing", false);
-        let png_output_filepath = get_image_output_filepath(&image_filepath, suffix_text) + ".png";
         encode_png(&result_image, &png_output_filepath, &png_metadata).expect(&format!(
             "Could not write png file to '{}'",
             png_output_filepath
@@ -647,6 +645,8 @@ impl Application for RepeatyGui {
             GuiEvent::PressedStartButton => {
                 self.process_state = ProcessState::Running;
 
+                let output_image_pixel_width = self.output_image_pixel_width.round() as i32;
+                let output_image_pixel_height = self.output_image_pixel_height.round() as i32;
                 let suffix_text = format!(
                     "__{}x{}__{}x{}mm",
                     pretty_print_float(self.repeat_x),
@@ -654,16 +654,14 @@ impl Application for RepeatyGui {
                     pretty_print_float(self.dim_x),
                     pretty_print_float(self.dim_y)
                 );
-
-                let output_image_pixel_width = self.output_image_pixel_width.round() as i32;
-                let output_image_pixel_height = self.output_image_pixel_height.round() as i32;
+                let png_output_filepath =
+                    get_image_output_filepath(&self.image.filepath, &suffix_text) + ".png";
                 create_pattern_png(
-                    &self.image.filepath,
+                    &png_output_filepath,
                     &self.image.bitmap,
                     &self.image.png_metadata,
                     output_image_pixel_width,
                     output_image_pixel_height,
-                    &suffix_text,
                 );
                 self.process_state = ProcessState::Finished;
             }
@@ -713,28 +711,48 @@ impl Application for RepeatyGui {
 
         let output_image_pixel_width = self.output_image_pixel_width.round() as i32;
         let output_image_pixel_height = self.output_image_pixel_height.round() as i32;
+        let suffix_text = format!(
+            "__{}x{}__{}x{}mm",
+            pretty_print_float(self.repeat_x),
+            pretty_print_float(self.repeat_y),
+            pretty_print_float(self.dim_x),
+            pretty_print_float(self.dim_y)
+        );
+        let png_output_filepath =
+            get_image_output_filepath(&self.image.filepath, &suffix_text) + ".png";
         let output_image_stats = Column::new()
             .padding(20)
             .align_items(Align::Center)
             .width(FillPortion(1))
             .push(
+                Text::new("Output image:".to_string())
+                    .horizontal_alignment(iced::HorizontalAlignment::Left)
+                    .size(LABEL_SIZE_DEFAULT + 5)
+                    .color(COLOR_DEFAULT),
+            )
+            .push(
+                Text::new(system::path_to_filename(&png_output_filepath))
+                    .size(LABEL_SIZE_DEFAULT)
+                    .color(COLOR_DEFAULT),
+            )
+            .push(
                 Text::new(format!(
-                    "Output image pixels per inch: {}",
+                    "{}x{}",
+                    output_image_pixel_width, output_image_pixel_height
+                ))
+                .horizontal_alignment(iced::HorizontalAlignment::Left)
+                .size(LABEL_SIZE_DEFAULT),
+            )
+            .push(
+                Text::new(format!(
+                    "DPI: {}",
                     pretty_print_float(pixel_per_millimeter_in_pixel_per_inch(
                         self.input_image_pixels_per_millimeter
                     ))
                 ))
+                .horizontal_alignment(iced::HorizontalAlignment::Left)
                 .size(ppi_label_size)
-                .color(ppi_label_color)
-                .width(FillPortion(1)),
-            )
-            .push(
-                Text::new(format!(
-                    "Output image size (pixels): {}x{}",
-                    output_image_pixel_width, output_image_pixel_height
-                ))
-                .size(LABEL_SIZE_DEFAULT)
-                .width(FillPortion(1)),
+                .color(ppi_label_color),
             );
 
         let repeat_count_x = {
@@ -842,6 +860,7 @@ impl Application for RepeatyGui {
             .push(dimension_mm_y);
 
         let result = Column::new()
+            .spacing(20)
             .padding(20)
             .align_items(Align::Center)
             .push(input_image_stats)
@@ -852,11 +871,11 @@ impl Application for RepeatyGui {
                     .push(column_repeats)
                     .push(column_dimensions),
             )
+            .push(output_image_stats)
             .push(
                 Button::new(&mut self.start_button_widget, Text::new("Create Pattern"))
                     .on_press(GuiEvent::PressedStartButton),
-            )
-            .push(output_image_stats);
+            );
 
         match self.process_state {
             ProcessState::Idle => result.into(),
