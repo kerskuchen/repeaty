@@ -316,11 +316,10 @@ fn create_pattern_png(
     image_filepath: &str,
     image: &Bitmap,
     png_metadata: &HashMap<String, Vec<u8>>,
-    repeat_count_x: i32,
-    repeat_count_y: i32,
+    result_pixel_width: i32,
+    result_pixel_height: i32,
+    suffix_text: &str,
 ) {
-    let result_pixel_width = image.width * repeat_count_x;
-    let result_pixel_height = image.height * repeat_count_y;
     let mut result_image = Bitmap::new(result_pixel_width as u32, result_pixel_height as u32);
 
     {
@@ -340,17 +339,32 @@ fn create_pattern_png(
 
     {
         let _timer = ct_lib::TimerScoped::new_scoped("Writing", false);
-        Bitmap::write_to_png_file(&result_image, "output.png");
-
-        let png_output_filepath = get_image_output_filepath(
-            &image_filepath,
-            &format!("__{}x{}", repeat_count_x, repeat_count_y),
-        );
-        let png_output_filepath = "output.png";
+        let png_output_filepath = get_image_output_filepath(&image_filepath, suffix_text) + ".png";
         encode_png(&result_image, &png_output_filepath, &png_metadata).expect(&format!(
             "Could not write png file to '{}'",
             png_output_filepath
         ));
+    }
+}
+
+struct Image {
+    pub filepath: String,
+    pub bitmap: Bitmap,
+    pub png_metadata: HashMap<String, Vec<u8>>,
+    pub ppi: Option<f64>,
+}
+
+impl Image {
+    fn new(filepath: &str) -> Image {
+        let bitmap = load_bitmap(&filepath);
+        let png_metadata = png_extract_chunks_to_copy(&filepath);
+        let ppi = get_ppi_from_png_metadata(&filepath, &png_metadata);
+        Image {
+            filepath: filepath.to_string(),
+            bitmap,
+            png_metadata,
+            ppi,
+        }
     }
 }
 
@@ -432,14 +446,59 @@ use iced::{
     button, text_input, Align, Application, Button, Column, Command, Element, Length::FillPortion,
     Row, Settings, Text, TextInput,
 };
+const LABEL_SIZE_DEFAULT: u16 = 20;
+const LABEL_SIZE_INVALID: u16 = 25;
+const COLOR_DEFAULT: iced::Color = iced::Color::BLACK;
+const COLOR_INVALID: iced::Color = iced::Color::from_rgb(1.0, 0.0, 0.0);
 
-#[derive(Default)]
+fn get_label_size_and_color(text: &str) -> (iced::Color, u16) {
+    if let Some(value) = text.parse::<f64>().ok() {
+        if value != 0.0 {
+            return (COLOR_DEFAULT, LABEL_SIZE_DEFAULT);
+        }
+    }
+    (COLOR_INVALID, LABEL_SIZE_INVALID)
+}
+fn get_ppi_label_size_and_color(ppi: f64) -> (iced::Color, u16) {
+    if (ppi - 300.0).abs() <= 0.1 {
+        (COLOR_DEFAULT, LABEL_SIZE_DEFAULT)
+    } else {
+        (COLOR_INVALID, LABEL_SIZE_INVALID)
+    }
+}
+
+fn pretty_print_float(value: f64) -> String {
+    if (value - value.round()).abs() < 0.01 {
+        format!("{:.0}", value.round())
+    } else {
+        format!("{:.2}", value)
+    }
+}
+
+#[derive(Debug, Clone)]
+enum GuiEvent {
+    ChangedRepeatCountX(String),
+    ChangedRepeatCountY(String),
+    ChangedDimensionMillimeterX(String),
+    ChangedDimensionMillimeterY(String),
+    PressedStartButton,
+}
+
+enum ProcessState {
+    Idle,
+    Running,
+    Finished,
+}
+
 struct RepeatyGui {
-    image: Option<Image>,
+    image: Image,
 
-    pixels_per_millimeter: f64,
-    image_pixel_width: f64,
-    image_pixel_height: f64,
+    input_image_pixels_per_millimeter: f64,
+    input_image_pixel_width: f64,
+    input_image_pixel_height: f64,
+
+    output_image_pixel_width: f64,
+    output_image_pixel_height: f64,
 
     repeat_x: f64,
     repeat_y: f64,
@@ -460,81 +519,89 @@ struct RepeatyGui {
 
     dim_x_widget: text_input::State,
     dim_y_widget: text_input::State,
-}
 
-#[derive(Debug, Clone)]
-enum GuiEvent {
-    ChangedRepeatCountX(String),
-    ChangedRepeatCountY(String),
-    ChangedDimensionMillimeterX(String),
-    ChangedDimensionMillimeterY(String),
-    PressedStartButton,
+    process_state: ProcessState,
 }
 
 impl RepeatyGui {
+    fn new() -> RepeatyGui {
+        let image_filepath = get_image_filepath_from_commandline();
+        let image = Image::new(&image_filepath);
+
+        let input_image_pixels_per_millimeter =
+            pixel_per_inch_in_pixel_per_millimeter(image.ppi.unwrap_or(72.0));
+        let input_image_pixel_width = image.bitmap.width as f64;
+        let input_image_pixel_height = image.bitmap.height as f64;
+
+        let mut result = RepeatyGui {
+            image,
+            input_image_pixels_per_millimeter,
+            input_image_pixel_width,
+            input_image_pixel_height,
+            output_image_pixel_width: 0.0,
+            output_image_pixel_height: 0.0,
+            repeat_x: 0.0,
+            repeat_y: 0.0,
+            dim_x: 0.0,
+            dim_y: 0.0,
+            repeat_x_text: "".to_string(),
+            repeat_y_text: "".to_string(),
+            dim_x_text: "".to_string(),
+            dim_y_text: "".to_string(),
+            start_button_widget: button::State::new(),
+            repeat_x_widget: text_input::State::new(),
+            repeat_y_widget: text_input::State::new(),
+            dim_x_widget: text_input::State::new(),
+            dim_y_widget: text_input::State::new(),
+            process_state: ProcessState::Idle,
+        };
+
+        result.set_repeat_count_x(5.0);
+        result.set_repeat_count_y(5.0);
+        result.repeat_x_text = pretty_print_float(result.repeat_x);
+        result.repeat_y_text = pretty_print_float(result.repeat_y);
+
+        result
+    }
+
     fn set_repeat_count_x(&mut self, value: f64) {
         self.repeat_x = value;
-        self.dim_x = self.repeat_x * self.image_pixel_width / self.pixels_per_millimeter;
-        self.dim_x_text = format!("{:.2}", self.dim_x);
+        self.dim_x =
+            self.repeat_x * self.input_image_pixel_width / self.input_image_pixels_per_millimeter;
+        self.dim_x_text = pretty_print_float(self.dim_x);
+
+        self.output_image_pixel_width = self.repeat_x * self.input_image_pixel_width;
+        self.process_state = ProcessState::Idle;
     }
 
     fn set_repeat_count_y(&mut self, value: f64) {
         self.repeat_y = value;
-        self.dim_y = self.repeat_y * self.image_pixel_height / self.pixels_per_millimeter;
-        self.dim_y_text = format!("{:.2}", self.dim_y);
+        self.dim_y =
+            self.repeat_y * self.input_image_pixel_height / self.input_image_pixels_per_millimeter;
+        self.dim_y_text = pretty_print_float(self.dim_y);
+
+        self.output_image_pixel_height = self.repeat_y * self.input_image_pixel_height;
+        self.process_state = ProcessState::Idle;
     }
 
     fn set_dimension_millimeter_x(&mut self, value: f64) {
         self.dim_x = value;
-        self.repeat_x = self.dim_x * self.pixels_per_millimeter / self.image_pixel_width;
-        self.repeat_x_text = format!("{:.2}", self.repeat_x);
+        self.repeat_x =
+            self.dim_x * self.input_image_pixels_per_millimeter / self.input_image_pixel_width;
+        self.repeat_x_text = pretty_print_float(self.repeat_x);
+
+        self.output_image_pixel_width = self.repeat_x * self.input_image_pixel_width;
+        self.process_state = ProcessState::Idle;
     }
 
     fn set_dimension_millimeter_y(&mut self, value: f64) {
         self.dim_y = value;
-        self.repeat_y = self.dim_y * self.pixels_per_millimeter / self.image_pixel_height;
-        self.repeat_y_text = format!("{:.2}", self.repeat_y);
-    }
-}
+        self.repeat_y =
+            self.dim_y * self.input_image_pixels_per_millimeter / self.input_image_pixel_height;
+        self.repeat_y_text = pretty_print_float(self.repeat_y);
 
-const LABEL_SIZE_DEFAULT: u16 = 20;
-const LABEL_SIZE_INVALID: u16 = 25;
-const COLOR_DEFAULT: iced::Color = iced::Color::BLACK;
-const COLOR_INVALID: iced::Color = iced::Color::from_rgb(1.0, 0.0, 0.0);
-fn get_label_size_and_color(text: &str) -> (iced::Color, u16) {
-    if let Some(value) = text.parse::<f64>().ok() {
-        if value != 0.0 {
-            return (COLOR_DEFAULT, LABEL_SIZE_DEFAULT);
-        }
-    }
-    (COLOR_INVALID, LABEL_SIZE_INVALID)
-}
-fn get_ppi_label_size_and_color(ppi: f64) -> (iced::Color, u16) {
-    if (ppi - 300.0).abs() <= 0.1 {
-        (COLOR_DEFAULT, LABEL_SIZE_DEFAULT)
-    } else {
-        (COLOR_INVALID, LABEL_SIZE_INVALID)
-    }
-}
-
-struct Image {
-    filepath: String,
-    bitmap: Bitmap,
-    png_metadata: HashMap<String, Vec<u8>>,
-    ppi: Option<f64>,
-}
-
-impl Image {
-    fn new(filepath: &str) -> Image {
-        let bitmap = load_bitmap(&filepath);
-        let png_metadata = png_extract_chunks_to_copy(&filepath);
-        let ppi = get_ppi_from_png_metadata(&filepath, &png_metadata);
-        Image {
-            filepath: filepath.to_string(),
-            bitmap,
-            png_metadata,
-            ppi,
-        }
+        self.output_image_pixel_height = self.repeat_y * self.input_image_pixel_height;
+        self.process_state = ProcessState::Idle;
     }
 }
 
@@ -544,25 +611,7 @@ impl Application for RepeatyGui {
     type Flags = ();
 
     fn new(_flags: ()) -> (RepeatyGui, Command<Self::Message>) {
-        let image_filepath = get_image_filepath_from_commandline();
-        let image = Image::new(&image_filepath);
-
-        let mut result = RepeatyGui::default();
-        result.pixels_per_millimeter =
-            pixel_per_inch_in_pixel_per_millimeter(image.ppi.unwrap_or(72.0));
-        result.image_pixel_width = image.bitmap.width as f64;
-        result.image_pixel_height = image.bitmap.height as f64;
-        result.image = Some(image);
-
-        result.set_repeat_count_x(5.0);
-        result.set_repeat_count_y(5.0);
-
-        result.repeat_x_text = format!("{:.2}", result.repeat_x);
-        result.repeat_y_text = format!("{:.2}", result.repeat_y);
-        result.dim_x_text = format!("{:.2}", result.dim_x);
-        result.dim_y_text = format!("{:.2}", result.dim_y);
-
-        (result, Command::none())
+        (RepeatyGui::new(), Command::none())
     }
 
     fn title(&self) -> String {
@@ -595,7 +644,29 @@ impl Application for RepeatyGui {
                     self.set_dimension_millimeter_y(value);
                 }
             }
-            GuiEvent::PressedStartButton => todo!(),
+            GuiEvent::PressedStartButton => {
+                self.process_state = ProcessState::Running;
+
+                let suffix_text = format!(
+                    "__{}x{}__{}x{}mm",
+                    pretty_print_float(self.repeat_x),
+                    pretty_print_float(self.repeat_y),
+                    pretty_print_float(self.dim_x),
+                    pretty_print_float(self.dim_y)
+                );
+
+                let output_image_pixel_width = self.output_image_pixel_width.round() as i32;
+                let output_image_pixel_height = self.output_image_pixel_height.round() as i32;
+                create_pattern_png(
+                    &self.image.filepath,
+                    &self.image.bitmap,
+                    &self.image.png_metadata,
+                    output_image_pixel_width,
+                    output_image_pixel_height,
+                    &suffix_text,
+                );
+                self.process_state = ProcessState::Finished;
+            }
         }
 
         Command::none()
@@ -603,7 +674,7 @@ impl Application for RepeatyGui {
 
     fn view(&mut self) -> Element<Self::Message> {
         let (ppi_label_color, ppi_label_size) = get_ppi_label_size_and_color(
-            pixel_per_millimeter_in_pixel_per_inch(self.pixels_per_millimeter),
+            pixel_per_millimeter_in_pixel_per_inch(self.input_image_pixels_per_millimeter),
         );
         let input_image_stats = Column::new()
             .padding(20)
@@ -611,8 +682,10 @@ impl Application for RepeatyGui {
             .width(FillPortion(1))
             .push(
                 Text::new(format!(
-                    "Image pixels per inch: {:.2}",
-                    pixel_per_millimeter_in_pixel_per_inch(self.pixels_per_millimeter)
+                    "Input image pixels per inch: {}",
+                    pretty_print_float(pixel_per_millimeter_in_pixel_per_inch(
+                        self.input_image_pixels_per_millimeter
+                    ))
                 ))
                 .size(ppi_label_size)
                 .color(ppi_label_color)
@@ -620,8 +693,34 @@ impl Application for RepeatyGui {
             )
             .push(
                 Text::new(format!(
-                    "Image size (pixels): {:.0}x{:.0}",
-                    self.image_pixel_width, self.image_pixel_height
+                    "Input image size (pixels): {:.0}x{:.0}",
+                    self.input_image_pixel_width, self.input_image_pixel_height
+                ))
+                .size(LABEL_SIZE_DEFAULT)
+                .width(FillPortion(1)),
+            );
+
+        let output_image_pixel_width = self.output_image_pixel_width.round() as i32;
+        let output_image_pixel_height = self.output_image_pixel_height.round() as i32;
+        let output_image_stats = Column::new()
+            .padding(20)
+            .align_items(Align::Center)
+            .width(FillPortion(1))
+            .push(
+                Text::new(format!(
+                    "Output image pixels per inch: {}",
+                    pretty_print_float(pixel_per_millimeter_in_pixel_per_inch(
+                        self.input_image_pixels_per_millimeter
+                    ))
+                ))
+                .size(ppi_label_size)
+                .color(ppi_label_color)
+                .width(FillPortion(1)),
+            )
+            .push(
+                Text::new(format!(
+                    "Output image size (pixels): {}x{}",
+                    output_image_pixel_width, output_image_pixel_height
                 ))
                 .size(LABEL_SIZE_DEFAULT)
                 .width(FillPortion(1)),
@@ -731,7 +830,7 @@ impl Application for RepeatyGui {
             .push(dimension_mm_x)
             .push(dimension_mm_y);
 
-        Column::new()
+        let result = Column::new()
             .padding(20)
             .align_items(Align::Center)
             .push(input_image_stats)
@@ -746,6 +845,28 @@ impl Application for RepeatyGui {
                 Button::new(&mut self.start_button_widget, Text::new("Create Pattern"))
                     .on_press(GuiEvent::PressedStartButton),
             )
-            .into()
+            .push(output_image_stats);
+
+        match self.process_state {
+            ProcessState::Idle => result.into(),
+            ProcessState::Running => result
+                .push(
+                    Text::new("Creating pattern - please wait!")
+                        .horizontal_alignment(iced::HorizontalAlignment::Center)
+                        .size(30)
+                        .color(iced::Color::from_rgb(0.0, 0.0, 0.5))
+                        .width(FillPortion(1)),
+                )
+                .into(),
+            ProcessState::Finished => result
+                .push(
+                    Text::new("Finished creating pattern. Enjoy!")
+                        .horizontal_alignment(iced::HorizontalAlignment::Center)
+                        .size(30)
+                        .color(iced::Color::from_rgb(0.0, 0.5, 0.0))
+                        .width(FillPortion(1)),
+                )
+                .into(),
+        }
     }
 }
