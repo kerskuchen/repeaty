@@ -93,8 +93,8 @@ fn get_image_output_filepath(image_filepath: &str, image_suffix: &str) -> String
 // NOTE: THIS IS FOR INTERNAL TESTING
 #[cfg(debug_assertions)]
 fn get_image_filepath_from_commandline() -> Option<String> {
-    //Some("examples/nathan.png".to_string())
-    None
+    Some("examples/kers.png".to_string())
+    // None
 }
 
 #[cfg(not(debug_assertions))]
