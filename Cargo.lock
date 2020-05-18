@@ -1383,6 +1383,7 @@ dependencies = [
  "fern 0.6.0",
  "gif",
  "iced",
+ "iced_native",
  "indexmap",
  "mtpng",
  "rayon",

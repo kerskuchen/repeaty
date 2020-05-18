@@ -94,8 +94,8 @@ fn get_image_output_filepath(image_filepath: &str, image_suffix: &str) -> String
 
 // NOTE: THIS IS FOR INTERNAL TESTING
 //#[cfg(debug_assertions)]
-fn get_image_filepath_from_commandline() -> String {
-    "examples/nathan.png".to_string()
+fn get_image_filepath_from_commandline() -> Option<String> {
+    Some("examples/nathan.png".to_string())
 }
 
 /*
@@ -442,7 +442,7 @@ fn main() {
 
 use iced::{
     button, text_input, Align, Application, Button, Column, Command, Element, Length::FillPortion,
-    Row, Settings, Text, TextInput,
+    Row, Settings, Subscription, Text, TextInput,
 };
 const LABEL_SIZE_DEFAULT: u16 = 20;
 const LABEL_SIZE_INVALID: u16 = 25;
@@ -480,16 +480,18 @@ enum GuiEvent {
     ChangedDimensionMillimeterX(String),
     ChangedDimensionMillimeterY(String),
     PressedStartButton,
+    WindowEvent(iced_native::Event),
 }
 
 enum ProcessState {
+    NoInput,
     Idle,
     Running,
     Finished,
 }
 
 struct RepeatyGui {
-    image: Image,
+    image: Option<Image>,
 
     input_image_pixels_per_millimeter: f64,
     input_image_pixel_width: f64,
@@ -523,19 +525,11 @@ struct RepeatyGui {
 
 impl RepeatyGui {
     fn new() -> RepeatyGui {
-        let image_filepath = get_image_filepath_from_commandline();
-        let image = Image::new(&image_filepath);
-
-        let input_image_pixels_per_millimeter =
-            pixel_per_inch_in_pixel_per_millimeter(image.ppi.unwrap_or(72.0));
-        let input_image_pixel_width = image.bitmap.width as f64;
-        let input_image_pixel_height = image.bitmap.height as f64;
-
         let mut result = RepeatyGui {
-            image,
-            input_image_pixels_per_millimeter,
-            input_image_pixel_width,
-            input_image_pixel_height,
+            image: None,
+            input_image_pixels_per_millimeter: 0.0,
+            input_image_pixel_width: 0.0,
+            input_image_pixel_height: 0.0,
             output_image_pixel_width: 0.0,
             output_image_pixel_height: 0.0,
             repeat_x: 0.0,
@@ -554,12 +548,36 @@ impl RepeatyGui {
             process_state: ProcessState::Idle,
         };
 
-        result.set_repeat_count_x(5.0);
-        result.set_repeat_count_y(5.0);
-        result.repeat_x_text = pretty_print_float(result.repeat_x);
-        result.repeat_y_text = pretty_print_float(result.repeat_y);
+        if let Some(image_filepath) = get_image_filepath_from_commandline() {
+            result.load_image(&image_filepath);
+        }
 
         result
+    }
+
+    fn load_image(&mut self, image_filepath: &str) {
+        let image = Image::new(&image_filepath);
+        self.input_image_pixels_per_millimeter =
+            pixel_per_inch_in_pixel_per_millimeter(image.ppi.unwrap_or(72.0));
+        self.input_image_pixel_width = image.bitmap.width as f64;
+        self.input_image_pixel_height = image.bitmap.height as f64;
+
+        self.image = Some(image);
+
+        if self.repeat_x == 0.0
+            || self.repeat_y == 0.0
+            || self.dim_x == 0.0
+            || self.dim_y == 0.0
+            || self.repeat_x.is_nan()
+            || self.repeat_y.is_nan()
+            || self.dim_x.is_nan()
+            || self.dim_y.is_nan()
+        {
+            self.set_repeat_count_x(5.0);
+            self.set_repeat_count_y(5.0);
+            self.repeat_x_text = pretty_print_float(self.repeat_x);
+            self.repeat_y_text = pretty_print_float(self.repeat_y);
+        }
     }
 
     fn set_repeat_count_x(&mut self, value: f64) {
@@ -643,117 +661,161 @@ impl Application for RepeatyGui {
                 }
             }
             GuiEvent::PressedStartButton => {
-                self.process_state = ProcessState::Running;
+                if let Some(image) = &self.image {
+                    self.process_state = ProcessState::Running;
 
-                let output_image_pixel_width = self.output_image_pixel_width.round() as i32;
-                let output_image_pixel_height = self.output_image_pixel_height.round() as i32;
-                let suffix_text = format!(
-                    "__{}x{}__{}x{}mm",
-                    pretty_print_float(self.repeat_x),
-                    pretty_print_float(self.repeat_y),
-                    pretty_print_float(self.dim_x),
-                    pretty_print_float(self.dim_y)
-                );
-                let png_output_filepath =
-                    get_image_output_filepath(&self.image.filepath, &suffix_text) + ".png";
-                create_pattern_png(
-                    &png_output_filepath,
-                    &self.image.bitmap,
-                    &self.image.png_metadata,
-                    output_image_pixel_width,
-                    output_image_pixel_height,
-                );
-                self.process_state = ProcessState::Finished;
+                    let output_image_pixel_width = self.output_image_pixel_width.round() as i32;
+                    let output_image_pixel_height = self.output_image_pixel_height.round() as i32;
+                    let suffix_text = format!(
+                        "__{}x{}__{}x{}mm",
+                        pretty_print_float(self.repeat_x),
+                        pretty_print_float(self.repeat_y),
+                        pretty_print_float(self.dim_x),
+                        pretty_print_float(self.dim_y)
+                    );
+                    let png_output_filepath =
+                        get_image_output_filepath(&image.filepath, &suffix_text) + ".png";
+                    create_pattern_png(
+                        &png_output_filepath,
+                        &image.bitmap,
+                        &image.png_metadata,
+                        output_image_pixel_width,
+                        output_image_pixel_height,
+                    );
+                    self.process_state = ProcessState::Finished;
+                }
             }
+            GuiEvent::WindowEvent(window_event) => match window_event {
+                iced_native::Event::Window(window_event) => match window_event {
+                    iced_native::window::Event::FileDropped(filepath) => {
+                        self.load_image(&filepath.to_string_borrowed());
+                    }
+                    _ => {}
+                },
+                iced_native::Event::Keyboard(key_event) => match key_event {
+                    iced_native::input::keyboard::Event::Input { key_code, .. } => {
+                        if key_code == iced_native::input::keyboard::KeyCode::Escape {
+                            std::process::exit(0);
+                        }
+                    }
+                    _ => {}
+                },
+                _ => {}
+            },
         }
 
         Command::none()
+    }
+
+    fn subscription(&self) -> Subscription<GuiEvent> {
+        iced_native::subscription::events().map(GuiEvent::WindowEvent)
     }
 
     fn view(&mut self) -> Element<Self::Message> {
         let (ppi_label_color, ppi_label_size) = get_ppi_label_size_and_color(
             pixel_per_millimeter_in_pixel_per_inch(self.input_image_pixels_per_millimeter),
         );
-        let input_image_stats = Column::new()
-            .padding(20)
-            .align_items(Align::Center)
-            .width(FillPortion(1))
-            .push(
-                Text::new("Input image:".to_string())
-                    .horizontal_alignment(iced::HorizontalAlignment::Left)
-                    .size(LABEL_SIZE_DEFAULT + 5)
-                    .color(COLOR_DEFAULT),
-            )
-            .push(
-                Text::new(self.image.filepath.to_string())
-                    .size(LABEL_SIZE_DEFAULT)
-                    .color(COLOR_DEFAULT),
-            )
-            .push(
-                Text::new(format!(
-                    "{:.0}x{:.0}",
-                    self.input_image_pixel_width, self.input_image_pixel_height
-                ))
-                .horizontal_alignment(iced::HorizontalAlignment::Left)
-                .size(LABEL_SIZE_DEFAULT),
-            )
-            .push(
-                Text::new(format!(
-                    "DPI: {}",
-                    pretty_print_float(pixel_per_millimeter_in_pixel_per_inch(
-                        self.input_image_pixels_per_millimeter
+        let input_image_stats = if let Some(image) = &self.image {
+            Column::new()
+                .spacing(10)
+                .padding(20)
+                .align_items(Align::Center)
+                .width(FillPortion(1))
+                .push(
+                    Text::new("Input image:".to_string())
+                        .horizontal_alignment(iced::HorizontalAlignment::Left)
+                        .size(LABEL_SIZE_DEFAULT + 5)
+                        .color(COLOR_DEFAULT),
+                )
+                .push(
+                    Text::new(image.filepath.to_string())
+                        .size(LABEL_SIZE_DEFAULT)
+                        .color(COLOR_DEFAULT),
+                )
+                .push(
+                    Text::new(format!(
+                        "{:.0}x{:.0}",
+                        self.input_image_pixel_width, self.input_image_pixel_height
                     ))
-                ))
-                .horizontal_alignment(iced::HorizontalAlignment::Left)
-                .size(ppi_label_size)
-                .color(ppi_label_color),
-            );
+                    .horizontal_alignment(iced::HorizontalAlignment::Left)
+                    .size(LABEL_SIZE_DEFAULT),
+                )
+                .push(
+                    Text::new(format!(
+                        "DPI: {}",
+                        pretty_print_float(pixel_per_millimeter_in_pixel_per_inch(
+                            self.input_image_pixels_per_millimeter
+                        ))
+                    ))
+                    .horizontal_alignment(iced::HorizontalAlignment::Left)
+                    .size(ppi_label_size)
+                    .color(ppi_label_color),
+                )
+        } else {
+            Column::new()
+                .spacing(10)
+                .padding(20)
+                .align_items(Align::Center)
+                .width(FillPortion(1))
+                .push(
+                    Text::new("Please drag and drop an image into this window!")
+                        .horizontal_alignment(iced::HorizontalAlignment::Center)
+                        .size(30)
+                        .color(iced::Color::from_rgb(0.8, 0.0, 0.1))
+                        .width(FillPortion(1)),
+                )
+        };
 
-        let output_image_pixel_width = self.output_image_pixel_width.round() as i32;
-        let output_image_pixel_height = self.output_image_pixel_height.round() as i32;
-        let suffix_text = format!(
-            "__{}x{}__{}x{}mm",
-            pretty_print_float(self.repeat_x),
-            pretty_print_float(self.repeat_y),
-            pretty_print_float(self.dim_x),
-            pretty_print_float(self.dim_y)
-        );
-        let png_output_filepath =
-            get_image_output_filepath(&self.image.filepath, &suffix_text) + ".png";
-        let output_image_stats = Column::new()
-            .padding(20)
-            .align_items(Align::Center)
-            .width(FillPortion(1))
-            .push(
-                Text::new("Output image:".to_string())
-                    .horizontal_alignment(iced::HorizontalAlignment::Left)
-                    .size(LABEL_SIZE_DEFAULT + 5)
-                    .color(COLOR_DEFAULT),
-            )
-            .push(
-                Text::new(system::path_to_filename(&png_output_filepath))
-                    .size(LABEL_SIZE_DEFAULT)
-                    .color(COLOR_DEFAULT),
-            )
-            .push(
-                Text::new(format!(
-                    "{}x{}",
-                    output_image_pixel_width, output_image_pixel_height
-                ))
-                .horizontal_alignment(iced::HorizontalAlignment::Left)
-                .size(LABEL_SIZE_DEFAULT),
-            )
-            .push(
-                Text::new(format!(
-                    "DPI: {}",
-                    pretty_print_float(pixel_per_millimeter_in_pixel_per_inch(
-                        self.input_image_pixels_per_millimeter
-                    ))
-                ))
-                .horizontal_alignment(iced::HorizontalAlignment::Left)
-                .size(ppi_label_size)
-                .color(ppi_label_color),
+        let output_image_stats = if let Some(image) = &self.image {
+            let output_image_pixel_width = self.output_image_pixel_width.round() as i32;
+            let output_image_pixel_height = self.output_image_pixel_height.round() as i32;
+            let suffix_text = format!(
+                "__{}x{}__{}x{}mm",
+                pretty_print_float(self.repeat_x),
+                pretty_print_float(self.repeat_y),
+                pretty_print_float(self.dim_x),
+                pretty_print_float(self.dim_y)
             );
+            let png_output_filepath =
+                get_image_output_filepath(&image.filepath, &suffix_text) + ".png";
+            Column::new()
+                .spacing(10)
+                .padding(20)
+                .align_items(Align::Center)
+                .width(FillPortion(1))
+                .push(
+                    Text::new("Output image:".to_string())
+                        .horizontal_alignment(iced::HorizontalAlignment::Left)
+                        .size(LABEL_SIZE_DEFAULT + 5)
+                        .color(COLOR_DEFAULT),
+                )
+                .push(
+                    Text::new(system::path_to_filename(&png_output_filepath))
+                        .size(LABEL_SIZE_DEFAULT)
+                        .color(COLOR_DEFAULT),
+                )
+                .push(
+                    Text::new(format!(
+                        "{}x{}",
+                        output_image_pixel_width, output_image_pixel_height
+                    ))
+                    .horizontal_alignment(iced::HorizontalAlignment::Left)
+                    .size(LABEL_SIZE_DEFAULT),
+                )
+                .push(
+                    Text::new(format!(
+                        "DPI: {}",
+                        pretty_print_float(pixel_per_millimeter_in_pixel_per_inch(
+                            self.input_image_pixels_per_millimeter
+                        ))
+                    ))
+                    .horizontal_alignment(iced::HorizontalAlignment::Left)
+                    .size(ppi_label_size)
+                    .color(ppi_label_color),
+                )
+        } else {
+            Column::new().spacing(10)
+        };
 
         let repeat_count_x = {
             let (label_color, label_size) = get_label_size_and_color(&self.repeat_x_text);
@@ -847,26 +909,25 @@ impl Application for RepeatyGui {
         };
 
         let column_repeats = Column::new()
-            .padding(20)
+            .padding(10)
             .align_items(Align::Center)
             .width(FillPortion(1))
             .push(repeat_count_x)
             .push(repeat_count_y);
         let column_dimensions = Column::new()
-            .padding(20)
+            .padding(10)
             .align_items(Align::Center)
             .width(FillPortion(1))
             .push(dimension_mm_x)
             .push(dimension_mm_y);
 
         let result = Column::new()
-            .spacing(20)
+            .spacing(10)
             .padding(20)
             .align_items(Align::Center)
             .push(input_image_stats)
             .push(
                 Row::new()
-                    .padding(20)
                     .align_items(Align::Center)
                     .push(column_repeats)
                     .push(column_dimensions),
@@ -878,6 +939,15 @@ impl Application for RepeatyGui {
             );
 
         match self.process_state {
+            ProcessState::NoInput => result
+                .push(
+                    Text::new("Please drag and drop an image into this window!")
+                        .horizontal_alignment(iced::HorizontalAlignment::Center)
+                        .size(30)
+                        .color(iced::Color::from_rgb(0.8, 0.0, 0.1))
+                        .width(FillPortion(1)),
+                )
+                .into(),
             ProcessState::Idle => result.into(),
             ProcessState::Running => result
                 .push(
