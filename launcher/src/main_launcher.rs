@@ -6,6 +6,8 @@ use ct_lib::system::PathHelper;
 
 use ct_lib::serde_derive::Deserialize;
 
+use ct_lib::log;
+
 use gif::SetParameter;
 use mtpng;
 use rayon::prelude::*;
@@ -27,11 +29,11 @@ fn meter_in_millimeter(meter: f64) -> f64 {
 }
 
 fn millimeter_in_inch(millimeter: f64) -> f64 {
-    millimeter * (1.0 / 2.54)
+    millimeter * (1.0 / 25.4)
 }
 
 fn inch_in_millimeter(inch: f64) -> f64 {
-    inch * 2.54
+    inch * 25.4
 }
 
 fn meter_in_inch(meter: f64) -> f64 {
@@ -284,29 +286,27 @@ fn get_ppi_from_png_metadata(
             info
         };
 
-        assert_eq!(
-            info.unit_is_meter, 1,
-            "Physical unit of image '{}' seems to be wrong, please re-export image",
-            image_filepath,
-        );
+        if info.unit_is_meter != 1 {
+            log::warn!(
+                "Physical unit of image '{}' seems to be wrong, please re-export image",
+                image_filepath,
+            );
+            return None;
+        }
 
         let ppi_x = pixel_per_meter_in_pixel_per_inch(info.pixel_per_unit_x as f64);
         let ppi_y = pixel_per_meter_in_pixel_per_inch(info.pixel_per_unit_y as f64);
-        assert_eq!(
-            info.pixel_per_unit_x, info.pixel_per_unit_y,
-            "Horizontal and Vertical DPI of image '{}' do not match: {:.2}x{:.2}",
-            image_filepath, ppi_x, ppi_y
-        );
+        if info.pixel_per_unit_x != info.pixel_per_unit_y {
+            log::warn!(
+                "Horizontal and Vertical DPI of image '{}' do not match: {:.2}x{:.2}",
+                image_filepath,
+                ppi_x,
+                ppi_y
+            );
+            return None;
+        }
 
-        let ppi = ppi_x;
-        assert!(
-            f64::abs(ppi - 300.0) < 0.1,
-            "Expected and DPI of image '{}' to be 300 but got {:.2}",
-            image_filepath,
-            ppi
-        );
-
-        Some(ppi)
+        Some(ppi_x)
     } else {
         None
     }
@@ -388,39 +388,49 @@ fn show_messagebox(caption: &str, message: &str, is_error: bool) {
     };
 }
 
-fn set_panic_hook() {
-    std::panic::set_hook(Box::new(|panic_info| {
-        let (message, location) = ct_lib::panic_message_split_to_message_and_location(panic_info);
-        let final_message = format!("{}\n\nError occured at: {}", message, location);
+fn init_logging(logfile_path: &str, loglevel: log::LevelFilter) -> Result<(), String> {
+    let logfile = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .append(false)
+        .open(logfile_path)
+        .map_err(|error| format!("Could not create logfile at '{}' : {}", logfile_path, error))?;
 
-        show_messagebox("Repeaty Error", &final_message, true);
+    fern::Dispatch::new()
+        .format(|out, message, record| out.finish(format_args!("{}: {}", record.level(), message)))
+        .level(loglevel)
+        .chain(std::io::stdout())
+        .chain(logfile)
+        .apply()
+        .map_err(|error| format!("Could initialize logger: {}", error))?;
 
-        // NOTE: This forces the other threads to shutdown as well
-        std::process::abort();
-    }));
+    Ok(())
 }
 
 fn main() {
-    set_panic_hook();
+    let logfile_path = system::path_join(&get_executable_dir(), "logging.txt");
+    if let Err(error) = init_logging(&logfile_path, log::LevelFilter::Error) {
+        show_messagebox(
+            main_launcher_info::LAUNCHER_WINDOW_TITLE,
+            &format!("Logger initialization failed : {}", error,),
+            true,
+        );
+        std::process::abort();
+    }
+
+    std::panic::set_hook(Box::new(|panic_info| {
+        log::error!("{}", panic_info);
+    }));
 
     RepeatyGui::run(Settings::default());
-
-    let repeat_count_x = 1;
-    let repeat_count_y = 1;
-
-    let image_width_mm = show_messagebox(
-        main_launcher_info::LAUNCHER_WINDOW_TITLE,
-        "Finished creating pattern. Enjoy!",
-        false,
-    );
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // GUI
 
 use iced::{
-    button, text_input, Align, Button, Column, Element, Length::FillPortion, Row, Sandbox,
-    Settings, Text, TextInput,
+    button, text_input, Align, Application, Button, Column, Command, Element, Length::FillPortion,
+    Row, Settings, Text, TextInput,
 };
 
 #[derive(Default)]
@@ -528,19 +538,21 @@ impl Image {
     }
 }
 
-impl Sandbox for RepeatyGui {
+impl Application for RepeatyGui {
+    type Executor = iced::executor::Default;
     type Message = GuiEvent;
+    type Flags = ();
 
-    fn new() -> RepeatyGui {
+    fn new(_flags: ()) -> (RepeatyGui, Command<Self::Message>) {
         let image_filepath = get_image_filepath_from_commandline();
         let image = Image::new(&image_filepath);
 
         let mut result = RepeatyGui::default();
-        // result.pixels_per_millimeter =
-        //     pixel_per_inch_in_pixel_per_millimeter(image.ppi.unwrap_or(72.0));
-        // result.image_pixel_width = image.bitmap.width as f64;
-        // result.image_pixel_height = image.bitmap.height as f64;
-        // result.image = Some(image);
+        result.pixels_per_millimeter =
+            pixel_per_inch_in_pixel_per_millimeter(image.ppi.unwrap_or(72.0));
+        result.image_pixel_width = image.bitmap.width as f64;
+        result.image_pixel_height = image.bitmap.height as f64;
+        result.image = Some(image);
 
         result.set_repeat_count_x(5.0);
         result.set_repeat_count_y(5.0);
@@ -550,14 +562,14 @@ impl Sandbox for RepeatyGui {
         result.dim_x_text = format!("{:.2}", result.dim_x);
         result.dim_y_text = format!("{:.2}", result.dim_y);
 
-        result
+        (result, Command::none())
     }
 
     fn title(&self) -> String {
         String::from(main_launcher_info::LAUNCHER_WINDOW_TITLE)
     }
 
-    fn update(&mut self, message: Self::Message) {
+    fn update(&mut self, message: Self::Message) -> Command<Self::Message> {
         match message {
             GuiEvent::ChangedRepeatCountX(value_str) => {
                 self.repeat_x_text = value_str;
@@ -585,6 +597,8 @@ impl Sandbox for RepeatyGui {
             }
             GuiEvent::PressedStartButton => todo!(),
         }
+
+        Command::none()
     }
 
     fn view(&mut self) -> Element<Self::Message> {

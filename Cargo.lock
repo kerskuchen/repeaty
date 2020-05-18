@@ -1380,6 +1380,7 @@ version = "0.1.0"
 dependencies = [
  "ct_lib",
  "ct_platform",
+ "fern 0.6.0",
  "gif",
  "iced",
  "indexmap",
