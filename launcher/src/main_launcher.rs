@@ -681,23 +681,34 @@ impl Application for RepeatyGui {
             .align_items(Align::Center)
             .width(FillPortion(1))
             .push(
+                Text::new("Input image:".to_string())
+                    .horizontal_alignment(iced::HorizontalAlignment::Left)
+                    .size(LABEL_SIZE_DEFAULT + 5)
+                    .color(COLOR_DEFAULT),
+            )
+            .push(
+                Text::new(self.image.filepath.to_string())
+                    .size(LABEL_SIZE_DEFAULT)
+                    .color(COLOR_DEFAULT),
+            )
+            .push(
                 Text::new(format!(
-                    "Input image pixels per inch: {}",
+                    "{:.0}x{:.0}",
+                    self.input_image_pixel_width, self.input_image_pixel_height
+                ))
+                .horizontal_alignment(iced::HorizontalAlignment::Left)
+                .size(LABEL_SIZE_DEFAULT),
+            )
+            .push(
+                Text::new(format!(
+                    "DPI: {}",
                     pretty_print_float(pixel_per_millimeter_in_pixel_per_inch(
                         self.input_image_pixels_per_millimeter
                     ))
                 ))
+                .horizontal_alignment(iced::HorizontalAlignment::Left)
                 .size(ppi_label_size)
-                .color(ppi_label_color)
-                .width(FillPortion(1)),
-            )
-            .push(
-                Text::new(format!(
-                    "Input image size (pixels): {:.0}x{:.0}",
-                    self.input_image_pixel_width, self.input_image_pixel_height
-                ))
-                .size(LABEL_SIZE_DEFAULT)
-                .width(FillPortion(1)),
+                .color(ppi_label_color),
             );
 
         let output_image_pixel_width = self.output_image_pixel_width.round() as i32;
