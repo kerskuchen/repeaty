@@ -1,4 +1,4 @@
-//#![windows_subsystem = "windows"]
+#![windows_subsystem = "windows"]
 
 use ct_lib::bitmap::*;
 use ct_lib::system;
@@ -8,8 +8,6 @@ use ct_lib::serde_derive::Deserialize;
 
 use ct_lib::log;
 
-use gif::SetParameter;
-use mtpng;
 use rayon::prelude::*;
 use winapi;
 
@@ -93,28 +91,22 @@ fn get_image_output_filepath(image_filepath: &str, image_suffix: &str) -> String
 }
 
 // NOTE: THIS IS FOR INTERNAL TESTING
-//#[cfg(debug_assertions)]
+#[cfg(debug_assertions)]
 fn get_image_filepath_from_commandline() -> Option<String> {
-    Some("examples/nathan.png".to_string())
+    //Some("examples/nathan.png".to_string())
+    None
 }
 
-/*
 #[cfg(not(debug_assertions))]
-fn get_image_filepath_from_commandline() -> String {
-    let mut args: Vec<String> = std::env::args().collect();
-
-    // NOTE: The first argument is the executable path
-    args.remove(0);
-
-    assert_eq!(
-        args.len(),
-        1,
-        "Please drag and drop one image onto the executable"
-    );
-
-    args.first().unwrap().to_string()
+fn get_image_filepath_from_commandline() -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 {
+        args.last().cloned()
+    } else {
+        // NOTE: The first argument is the executable path
+        None
+    }
 }
-*/
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Low level bitmap helper function
@@ -127,19 +119,18 @@ struct PngPhys {
     unit_is_meter: u8,
 }
 
-fn png_extract_chunks_to_copy(image_filepath: &str) -> HashMap<String, Vec<u8>> {
-    let file_bytes =
-        std::fs::read(image_filepath).expect(&format!("Could not open file '{}'", image_filepath));
-    let decoding_error_message = format!("Could not decode png file '{}'", image_filepath);
+type PngMetadataChunks = HashMap<String, Vec<u8>>;
+
+fn png_extract_chunks_to_copy(image_filepath: &str) -> Result<PngMetadataChunks, String> {
+    let file_bytes = std::fs::read(image_filepath)
+        .map_err(|error| format!("Could not open file '{}' : {}", &image_filepath, error))?;
+    let decoding_error_message = format!("Could not decode png file '{}'", &image_filepath);
 
     // Check header
     const PNG_HEADER: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
-    assert!(
-        file_bytes.len() > PNG_HEADER.len(),
-        "{}",
-        decoding_error_message
-    );
-    assert!(file_bytes[0..8] == PNG_HEADER, "{}", decoding_error_message);
+    if file_bytes.len() < PNG_HEADER.len() || file_bytes[0..8] != PNG_HEADER {
+        return Err(decoding_error_message);
+    }
 
     let mut chunks = HashMap::new();
     let mut chunk_begin_pos = PNG_HEADER.len();
@@ -154,11 +145,9 @@ fn png_extract_chunks_to_copy(image_filepath: &str) -> HashMap<String, Vec<u8>> 
         let chunk_complete_length = 4 + 4 + chunk_data_length + 4;
 
         let remaining_bytes = file_bytes.len() - chunk_begin_pos;
-        assert!(
-            chunk_complete_length <= remaining_bytes,
-            "{}",
-            decoding_error_message
-        );
+        if chunk_complete_length > remaining_bytes {
+            return Err(decoding_error_message);
+        }
 
         let chunk_type =
             std::str::from_utf8(&file_bytes[(chunk_begin_pos + 4)..(chunk_begin_pos + 8)])
@@ -182,42 +171,15 @@ fn png_extract_chunks_to_copy(image_filepath: &str) -> HashMap<String, Vec<u8>> 
         chunk_begin_pos += chunk_complete_length;
     }
 
-    chunks
+    Ok(chunks)
 }
 
-fn load_bitmap(image_filepath: &str) -> Bitmap {
-    if system::path_to_extension(&image_filepath).ends_with("gif") {
-        //bitmap_create_from_gif_file(&image_filepath)
-        todo!()
-    } else if system::path_to_extension(&image_filepath).ends_with("png") {
-        Bitmap::create_from_png_file(&image_filepath)
+fn load_bitmap(image_filepath: &str) -> Result<Bitmap, String> {
+    if system::path_to_extension(&image_filepath).ends_with("png") {
+        Bitmap::from_png_file(&image_filepath)
     } else {
-        panic!("We only support GIF or PNG images");
+        Err("We only support PNG images".to_string())
     }
-}
-
-fn bitmap_create_from_gif_file(image_filepath: &str) -> Bitmap {
-    let mut decoder = gif::Decoder::new(
-        File::open(image_filepath).expect(&format!("Cannot open file '{}'", image_filepath)),
-    );
-    decoder.set(gif::ColorOutput::RGBA);
-    let mut decoder = decoder
-        .read_info()
-        .expect(&format!("Cannot decode file '{}'", image_filepath));
-    let frame = decoder
-        .read_next_frame()
-        .expect(&format!(
-            "Cannot decode first frame in '{}'",
-            image_filepath
-        ))
-        .expect(&format!("No frame found in '{}'", image_filepath));
-    let buffer: Vec<PixelRGBA> = frame
-        .buffer
-        .chunks_exact(4)
-        .into_iter()
-        .map(|color| PixelRGBA::new(color[0], color[1], color[2], color[3]))
-        .collect();
-    Bitmap::new_from_buffer(frame.width as u32, frame.height as u32, buffer)
 }
 
 fn copy_pixels(
@@ -240,7 +202,7 @@ fn copy_pixels(
 fn encode_png(
     image: &Bitmap,
     output_filepath: &str,
-    additional_chunks: &HashMap<String, Vec<u8>>,
+    additional_chunks: &PngMetadataChunks,
 ) -> Result<(), std::io::Error> {
     let image_width = image.width as u32;
     let image_height = image.height as u32;
@@ -270,18 +232,20 @@ fn encode_png(
 
 fn get_ppi_from_png_metadata(
     image_filepath: &str,
-    png_metadata: &HashMap<String, Vec<u8>>,
-) -> Option<f64> {
+    png_metadata: &PngMetadataChunks,
+) -> Result<Option<f64>, String> {
     if let Some(metadata) = png_metadata.get("pHYs") {
         let info = {
             let mut deserializer = ct_lib::bincode::config();
             deserializer.big_endian();
             let info = deserializer
                 .deserialize::<PngPhys>(metadata)
-                .expect(&format!(
-                    "Could not read DPI metadata from '{}'",
-                    &image_filepath
-                ));
+                .map_err(|error| {
+                    format!(
+                        "Could not read DPI metadata from '{}' : {}",
+                        &image_filepath, error
+                    )
+                })?;
 
             info
         };
@@ -291,7 +255,7 @@ fn get_ppi_from_png_metadata(
                 "Physical unit of image '{}' seems to be wrong, please re-export image",
                 image_filepath,
             );
-            return None;
+            return Ok(None);
         }
 
         let ppi_x = pixel_per_meter_in_pixel_per_inch(info.pixel_per_unit_x as f64);
@@ -303,19 +267,19 @@ fn get_ppi_from_png_metadata(
                 ppi_x,
                 ppi_y
             );
-            return None;
+            return Ok(None);
         }
 
-        Some(ppi_x)
+        Ok(Some(ppi_x))
     } else {
-        None
+        Ok(None)
     }
 }
 
 fn create_pattern_png(
     png_output_filepath: &str,
     image: &Bitmap,
-    png_metadata: &HashMap<String, Vec<u8>>,
+    png_metadata: &PngMetadataChunks,
     result_pixel_width: i32,
     result_pixel_height: i32,
 ) {
@@ -348,21 +312,21 @@ fn create_pattern_png(
 struct Image {
     pub filepath: String,
     pub bitmap: Bitmap,
-    pub png_metadata: HashMap<String, Vec<u8>>,
+    pub png_metadata: PngMetadataChunks,
     pub ppi: Option<f64>,
 }
 
 impl Image {
-    fn new(filepath: &str) -> Image {
-        let bitmap = load_bitmap(&filepath);
-        let png_metadata = png_extract_chunks_to_copy(&filepath);
-        let ppi = get_ppi_from_png_metadata(&filepath, &png_metadata);
-        Image {
+    fn new(filepath: &str) -> Result<Image, String> {
+        let bitmap = load_bitmap(&filepath)?;
+        let png_metadata = png_extract_chunks_to_copy(&filepath)?;
+        let ppi = get_ppi_from_png_metadata(&filepath, &png_metadata)?;
+        Ok(Image {
             filepath: filepath.to_string(),
             bitmap,
             png_metadata,
             ppi,
-        }
+        })
     }
 }
 
@@ -521,6 +485,8 @@ struct RepeatyGui {
     dim_y_widget: text_input::State,
 
     process_state: ProcessState,
+
+    current_error: Option<String>,
 }
 
 impl RepeatyGui {
@@ -546,6 +512,8 @@ impl RepeatyGui {
             dim_x_widget: text_input::State::new(),
             dim_y_widget: text_input::State::new(),
             process_state: ProcessState::Idle,
+
+            current_error: None,
         };
 
         if let Some(image_filepath) = get_image_filepath_from_commandline() {
@@ -557,6 +525,14 @@ impl RepeatyGui {
 
     fn load_image(&mut self, image_filepath: &str) {
         let image = Image::new(&image_filepath);
+        if let Err(error_message) = Image::new(&image_filepath) {
+            self.current_error = Some(error_message);
+            return;
+        } else {
+            self.current_error = None;
+        }
+
+        let image = image.unwrap();
         self.input_image_pixels_per_millimeter =
             pixel_per_inch_in_pixel_per_millimeter(image.ppi.unwrap_or(72.0));
         self.input_image_pixel_width = image.bitmap.width as f64;
@@ -937,6 +913,18 @@ impl Application for RepeatyGui {
                 Button::new(&mut self.start_button_widget, Text::new("Create Pattern"))
                     .on_press(GuiEvent::PressedStartButton),
             );
+
+        let result = if let Some(error_message) = &self.current_error {
+            result.push(
+                Text::new(format!("Error: {}", error_message))
+                    .horizontal_alignment(iced::HorizontalAlignment::Center)
+                    .size(30)
+                    .color(iced::Color::from_rgb(0.8, 0.0, 0.1))
+                    .width(FillPortion(1)),
+            )
+        } else {
+            result
+        };
 
         match self.process_state {
             ProcessState::NoInput => result

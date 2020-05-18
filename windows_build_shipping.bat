@@ -12,9 +12,14 @@ mkdir temp
 cargo run --package ct_assetbaker && cargo build --release --package launcher
 if %errorlevel% neq 0 goto :error
 
-REM NOTE: robocopy has success error code 1
-robocopy "resources" "shipping_windows\resources" /s /e > nul
-if %errorlevel% neq 1 goto :error
+REM Only run robocopy if resources folder is not empty or it will return an error
+for /F %%i in ('dir /b /a "resources\*"') do (
+    REM NOTE: robocopy has success error code 1
+    robocopy "resources" "shipping_windows\resources" /s /e > nul
+    if %errorlevel% neq 1 goto :error
+    goto :continue
+)
+:continue
 
 REM Check if we have resource hacker in %path%
 where ResourceHacker.exe > nul 2> nul
