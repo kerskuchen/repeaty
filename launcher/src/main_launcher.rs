@@ -9,7 +9,6 @@ use ct_lib::serde_derive::Deserialize;
 use ct_lib::log;
 
 use rayon::prelude::*;
-use winapi;
 
 use std::{collections::HashMap, fs::File};
 
@@ -880,37 +879,6 @@ fn draw_textinput_fields<'a>(
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Main
 
-#[cfg(windows)]
-fn show_messagebox(caption: &str, message: &str, is_error: bool) {
-    use std::iter::once;
-    use std::os::windows::ffi::OsStrExt;
-    use std::ptr::null_mut;
-    use winapi::um::winuser::{MessageBoxW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK};
-
-    let caption_wide: Vec<u16> = std::ffi::OsStr::new(caption)
-        .encode_wide()
-        .chain(once(0))
-        .collect();
-    let message_wide: Vec<u16> = std::ffi::OsStr::new(message)
-        .encode_wide()
-        .chain(once(0))
-        .collect();
-
-    unsafe {
-        MessageBoxW(
-            null_mut(),
-            message_wide.as_ptr(),
-            caption_wide.as_ptr(),
-            MB_OK
-                | if is_error {
-                    MB_ICONERROR
-                } else {
-                    MB_ICONINFORMATION
-                },
-        )
-    };
-}
-
 fn main() {
     let logfile_path = {
         let logfile_dir = system::get_appdata_dir(
@@ -921,7 +889,7 @@ fn main() {
         system::path_join(&logfile_dir, "logging.txt")
     };
     if let Err(error) = ct_lib::init_logging(&logfile_path, log::LevelFilter::Info) {
-        show_messagebox(
+        system::show_messagebox(
             main_launcher_info::LAUNCHER_WINDOW_TITLE,
             &format!("Logger initialization failed : {}", error,),
             true,

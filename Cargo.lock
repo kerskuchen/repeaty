@@ -519,6 +519,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "walkdir",
+ "winapi 0.3.8",
 ]
 
 [[package]]
@@ -1395,7 +1396,6 @@ dependencies = [
  "mtpng",
  "rayon",
  "serde",
- "winapi 0.3.8",
 ]
 
 [[package]]
