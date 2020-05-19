@@ -87,17 +87,17 @@ fn get_image_filepath_from_commandline() -> Option<String> {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Low level bitmap helper function
 
+type PngMetadataChunks = HashMap<String, Vec<u8>>;
+
 #[repr(C)]
 #[derive(Deserialize)]
-struct PngPhys {
+struct PngPhysChunk {
     pixel_per_unit_x: u32,
     pixel_per_unit_y: u32,
     unit_is_meter: u8,
 }
 
-type PngMetadataChunks = HashMap<String, Vec<u8>>;
-
-fn png_extract_chunks_to_copy(image_filepath: &str) -> Result<PngMetadataChunks, String> {
+fn png_extract_ancillary_chunks(image_filepath: &str) -> Result<PngMetadataChunks, String> {
     let file_bytes = std::fs::read(image_filepath)
         .map_err(|error| format!("Could not open file '{}' : {}", &image_filepath, error))?;
     let decoding_error_message = format!("Could not decode png file '{}'", &image_filepath);
@@ -108,7 +108,8 @@ fn png_extract_chunks_to_copy(image_filepath: &str) -> Result<PngMetadataChunks,
         return Err(decoding_error_message);
     }
 
-    let mut chunks = HashMap::new();
+    // Iterate chunks
+    let mut result = HashMap::new();
     let mut chunk_begin_pos = PNG_HEADER.len();
     while chunk_begin_pos < file_bytes.len() {
         let chunk_data_length = {
@@ -130,7 +131,7 @@ fn png_extract_chunks_to_copy(image_filepath: &str) -> Result<PngMetadataChunks,
             std::str::from_utf8(&file_bytes[(chunk_begin_pos + 4)..(chunk_begin_pos + 8)])
                 .map_err(|error| format!("{} : {}", &decoding_error_message, error))?;
 
-        let keep_chunk = match chunk_type {
+        let extract_chunk = match chunk_type {
             "cHRM" => true,
             "gAMA" => true,
             "iCCP" => true,
@@ -138,9 +139,9 @@ fn png_extract_chunks_to_copy(image_filepath: &str) -> Result<PngMetadataChunks,
             "sRGB" => true,
             _ => false,
         };
-        let chunk_data_pos = chunk_begin_pos + 4 + 4;
-        if keep_chunk {
-            chunks.insert(
+        if extract_chunk {
+            let chunk_data_pos = chunk_begin_pos + 4 + 4;
+            result.insert(
                 chunk_type.to_string(),
                 file_bytes[chunk_data_pos..(chunk_data_pos + chunk_data_length)].to_vec(),
             );
@@ -148,7 +149,7 @@ fn png_extract_chunks_to_copy(image_filepath: &str) -> Result<PngMetadataChunks,
         chunk_begin_pos += chunk_complete_length;
     }
 
-    Ok(chunks)
+    Ok(result)
 }
 
 fn load_bitmap(image_filepath: &str) -> Result<Bitmap, String> {
@@ -159,49 +160,25 @@ fn load_bitmap(image_filepath: &str) -> Result<Bitmap, String> {
     }
 }
 
-fn copy_pixels(
-    input_image: &Bitmap,
-    output_image_width: i32,
-    output_image_buffer: &mut [PixelRGBA],
-    start_index: usize,
-) {
-    for index in 0..output_image_buffer.len() {
-        let output_x = (index + start_index) % output_image_width as usize;
-        let output_y = (index + start_index) / output_image_width as usize;
-
-        let input_x = output_x as i32 % input_image.width;
-        let input_y = output_y as i32 % input_image.height;
-
-        output_image_buffer[index] = input_image.get(input_x, input_y);
-    }
-}
-
 fn encode_png(
     image: &Bitmap,
     output_filepath: &str,
     additional_chunks: &PngMetadataChunks,
 ) -> Result<(), std::io::Error> {
-    let image_width = image.width as u32;
-    let image_height = image.height as u32;
-    let bytes = unsafe {
-        let len = image.data.len() * std::mem::size_of::<u32>();
-        let ptr = image.data.as_ptr() as *const u8;
-        std::slice::from_raw_parts(ptr, len)
-    };
-
-    let options = mtpng::encoder::Options::new();
-    let writer = File::create(output_filepath)?;
-    let mut encoder = mtpng::encoder::Encoder::new(writer, &options);
+    let file = File::create(output_filepath)?;
+    let options = mtpng::encoder::Options::default();
+    let mut encoder = mtpng::encoder::Encoder::new(file, &options);
 
     let mut header = mtpng::Header::new();
-    header.set_size(image_width, image_height)?;
+    header.set_size(image.width as u32, image.height as u32)?;
     header.set_color(mtpng::ColorType::TruecolorAlpha, 8)?;
-
     encoder.write_header(&header)?;
+
     for (chunktype, chunk) in additional_chunks {
         encoder.write_chunk(chunktype.as_bytes(), chunk)?;
     }
-    encoder.write_image_rows(bytes)?;
+
+    encoder.write_image_rows(image.as_bytes())?;
     encoder.finish()?;
 
     Ok(())
@@ -209,14 +186,14 @@ fn encode_png(
 
 fn get_ppi_from_png_metadata(
     image_filepath: &str,
-    png_metadata: &PngMetadataChunks,
+    png_metadata_chunks: &PngMetadataChunks,
 ) -> Result<Option<f64>, String> {
-    if let Some(metadata) = png_metadata.get("pHYs") {
+    if let Some(metadata) = png_metadata_chunks.get("pHYs") {
         let info = {
             let mut deserializer = ct_lib::bincode::config();
             deserializer.big_endian();
             let info = deserializer
-                .deserialize::<PngPhys>(metadata)
+                .deserialize::<PngPhysChunk>(metadata)
                 .map_err(|error| {
                     format!(
                         "Could not read DPI metadata from '{}' : {}",
@@ -265,6 +242,23 @@ fn create_pattern_png(
     {
         let _timer = ct_lib::TimerScoped::new_scoped("Compositing", true);
 
+        fn copy_pixels_tiled(
+            input_image: &Bitmap,
+            output_image_width: i32,
+            output_image_buffer: &mut [PixelRGBA],
+            start_index: usize,
+        ) {
+            for index in 0..output_image_buffer.len() {
+                let output_x = (index + start_index) % output_image_width as usize;
+                let output_y = (index + start_index) / output_image_width as usize;
+
+                let input_x = output_x as i32 % input_image.width;
+                let input_y = output_y as i32 % input_image.height;
+
+                output_image_buffer[index] = input_image.get(input_x, input_y);
+            }
+        }
+
         let chunk_size = 4 * 1024 * 1024;
         let result_image_width = result_image.width;
         result_image
@@ -273,7 +267,7 @@ fn create_pattern_png(
             .enumerate()
             .for_each(|(chunk_index, chunk)| {
                 let start_index = chunk_index * chunk_size;
-                copy_pixels(&image, result_image_width, chunk, start_index);
+                copy_pixels_tiled(&image, result_image_width, chunk, start_index);
             });
     }
 
@@ -288,96 +282,57 @@ fn create_pattern_png(
     }
 }
 
-struct Image {
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Image
+
+struct InputImage {
     pub filepath: String,
     pub bitmap: Bitmap,
     pub png_metadata: PngMetadataChunks,
     pub ppi: Option<f64>,
 }
 
-impl Image {
-    fn new(filepath: &str) -> Result<Image, String> {
+impl InputImage {
+    fn new(filepath: &str) -> Result<InputImage, String> {
         let bitmap = load_bitmap(&filepath)?;
-        let png_metadata = png_extract_chunks_to_copy(&filepath)?;
+        let png_metadata = png_extract_ancillary_chunks(&filepath)?;
         let ppi = get_ppi_from_png_metadata(&filepath, &png_metadata)?;
-        Ok(Image {
+        Ok(InputImage {
             filepath: filepath.to_string(),
             bitmap,
             png_metadata,
             ppi,
         })
     }
-}
 
-////////////////////////////////////////////////////////////////////////////////////////////////////
-// Main
-
-#[cfg(windows)]
-fn show_messagebox(caption: &str, message: &str, is_error: bool) {
-    use std::iter::once;
-    use std::os::windows::ffi::OsStrExt;
-    use std::ptr::null_mut;
-    use winapi::um::winuser::{MessageBoxW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK};
-
-    let caption_wide: Vec<u16> = std::ffi::OsStr::new(caption)
-        .encode_wide()
-        .chain(once(0))
-        .collect();
-    let message_wide: Vec<u16> = std::ffi::OsStr::new(message)
-        .encode_wide()
-        .chain(once(0))
-        .collect();
-
-    unsafe {
-        MessageBoxW(
-            null_mut(),
-            message_wide.as_ptr(),
-            caption_wide.as_ptr(),
-            MB_OK
-                | if is_error {
-                    MB_ICONERROR
-                } else {
-                    MB_ICONINFORMATION
-                },
-        )
-    };
-}
-
-fn init_logging(logfile_path: &str, loglevel: log::LevelFilter) -> Result<(), String> {
-    let logfile = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .append(false)
-        .open(logfile_path)
-        .map_err(|error| format!("Could not create logfile at '{}' : {}", logfile_path, error))?;
-
-    fern::Dispatch::new()
-        .format(|out, message, record| out.finish(format_args!("{}: {}", record.level(), message)))
-        .level(loglevel)
-        .chain(std::io::stdout())
-        .chain(logfile)
-        .apply()
-        .map_err(|error| format!("Could initialize logger: {}", error))?;
-
-    Ok(())
-}
-
-fn main() {
-    let logfile_path = system::path_join(&get_executable_dir(), "logging.txt");
-    if let Err(error) = init_logging(&logfile_path, log::LevelFilter::Error) {
-        show_messagebox(
-            main_launcher_info::LAUNCHER_WINDOW_TITLE,
-            &format!("Logger initialization failed : {}", error,),
-            true,
-        );
-        std::process::abort();
+    fn width_height_pixel_per_mm(&self) -> (f64, f64, f64) {
+        let width = self.bitmap.width as f64;
+        let height = self.bitmap.height as f64;
+        let pixel_per_mm = pixel_per_inch_in_pixel_per_millimeter(self.ppi.unwrap_or(72.0));
+        (width, height, pixel_per_mm)
     }
 
-    std::panic::set_hook(Box::new(|panic_info| {
-        log::error!("{}", panic_info);
-    }));
-
-    RepeatyGui::run(Settings::default());
+    fn output_image_pixel_width_height_filepath(
+        &self,
+        repeat_x: f64,
+        repeat_y: f64,
+        dim_mm_x: f64,
+        dim_mm_y: f64,
+    ) -> (i32, i32, String) {
+        let suffix_text = format!(
+            "__{}x{}__{}x{}mm",
+            pretty_print_float(repeat_x),
+            pretty_print_float(repeat_y),
+            pretty_print_float(dim_mm_x),
+            pretty_print_float(dim_mm_y)
+        );
+        let png_output_filepath = get_image_output_filepath(&self.filepath, &suffix_text) + ".png";
+        (
+            (repeat_x * self.bitmap.width as f64).round() as i32,
+            (repeat_y * self.bitmap.height as f64).round() as i32,
+            png_output_filepath,
+        )
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -387,6 +342,7 @@ use iced::{
     button, text_input, Align, Application, Button, Column, Command, Element, Length::FillPortion,
     Row, Settings, Subscription, Text, TextInput,
 };
+
 const LABEL_SIZE_DEFAULT: u16 = 20;
 const LABEL_SIZE_INVALID: u16 = 25;
 const COLOR_DEFAULT: iced::Color = iced::Color::BLACK;
@@ -414,38 +370,9 @@ impl Default for ProcessState {
     }
 }
 
-fn get_image_width_height_pixel_per_mm(image: &Image) -> (f64, f64, f64) {
-    let width = image.bitmap.width as f64;
-    let height = image.bitmap.height as f64;
-    let pixel_per_mm = pixel_per_inch_in_pixel_per_millimeter(image.ppi.unwrap_or(72.0));
-    (width, height, pixel_per_mm)
-}
-
-fn get_output_pixel_width_height_filepath(
-    image: &Image,
-    repeat_x: f64,
-    repeat_y: f64,
-    dim_mm_x: f64,
-    dim_mm_y: f64,
-) -> (i32, i32, String) {
-    let suffix_text = format!(
-        "__{}x{}__{}x{}mm",
-        pretty_print_float(repeat_x),
-        pretty_print_float(repeat_y),
-        pretty_print_float(dim_mm_x),
-        pretty_print_float(dim_mm_y)
-    );
-    let png_output_filepath = get_image_output_filepath(&image.filepath, &suffix_text) + ".png";
-    (
-        (repeat_x * image.bitmap.width as f64).round() as i32,
-        (repeat_y * image.bitmap.height as f64).round() as i32,
-        png_output_filepath,
-    )
-}
-
 #[derive(Default)]
 struct RepeatyGui {
-    image: Option<Image>,
+    image: Option<InputImage>,
 
     repeat_x: f64,
     repeat_y: f64,
@@ -485,8 +412,8 @@ impl RepeatyGui {
 
     fn load_image(&mut self, image_filepath: &str) {
         let image = {
-            let image_result = Image::new(&image_filepath);
-            if let Err(error_message) = Image::new(&image_filepath) {
+            let image_result = InputImage::new(&image_filepath);
+            if let Err(error_message) = InputImage::new(&image_filepath) {
                 self.current_error = Some(error_message);
                 return;
             }
@@ -506,17 +433,16 @@ impl RepeatyGui {
             || self.dim_mm_x.is_nan()
             || self.dim_mm_y.is_nan()
         {
-            self.set_repeat_count_x(5.0);
-            self.set_repeat_count_y(5.0);
+            self.set_repeat_x(5.0);
+            self.set_repeat_y(5.0);
             self.repeat_x_text = pretty_print_float(self.repeat_x);
             self.repeat_y_text = pretty_print_float(self.repeat_y);
         }
     }
 
-    fn set_repeat_count_x(&mut self, value: f64) {
+    fn set_repeat_x(&mut self, value: f64) {
         if let Some(image) = &self.image {
-            let (input_width, _input_height, pixel_per_mm) =
-                get_image_width_height_pixel_per_mm(image);
+            let (input_width, _input_height, pixel_per_mm) = image.width_height_pixel_per_mm();
 
             self.repeat_x = value;
             self.dim_mm_x = self.repeat_x * input_width / pixel_per_mm;
@@ -525,11 +451,9 @@ impl RepeatyGui {
             self.process_state = ProcessState::Idle;
         }
     }
-
-    fn set_repeat_count_y(&mut self, value: f64) {
+    fn set_repeat_y(&mut self, value: f64) {
         if let Some(image) = &self.image {
-            let (_input_width, input_height, pixel_per_mm) =
-                get_image_width_height_pixel_per_mm(image);
+            let (_input_width, input_height, pixel_per_mm) = image.width_height_pixel_per_mm();
 
             self.repeat_y = value;
             self.dim_mm_y = self.repeat_y * input_height / pixel_per_mm;
@@ -538,11 +462,9 @@ impl RepeatyGui {
             self.process_state = ProcessState::Idle;
         }
     }
-
-    fn set_dimension_millimeter_x(&mut self, value: f64) {
+    fn set_dim_mm_x(&mut self, value: f64) {
         if let Some(image) = &self.image {
-            let (input_width, _input_height, pixel_per_mm) =
-                get_image_width_height_pixel_per_mm(image);
+            let (input_width, _input_height, pixel_per_mm) = image.width_height_pixel_per_mm();
 
             self.dim_mm_x = value;
             self.repeat_x = self.dim_mm_x * pixel_per_mm / input_width;
@@ -551,11 +473,9 @@ impl RepeatyGui {
             self.process_state = ProcessState::Idle;
         }
     }
-
-    fn set_dimension_millimeter_y(&mut self, value: f64) {
+    fn set_dim_mm_y(&mut self, value: f64) {
         if let Some(image) = &self.image {
-            let (_input_width, input_height, pixel_per_mm) =
-                get_image_width_height_pixel_per_mm(image);
+            let (_input_width, input_height, pixel_per_mm) = image.width_height_pixel_per_mm();
 
             self.dim_mm_y = value;
             self.repeat_y = self.dim_mm_y * pixel_per_mm / input_height;
@@ -584,25 +504,25 @@ impl Application for RepeatyGui {
             GuiEvent::ChangedRepeatCountX(value_str) => {
                 self.repeat_x_text = value_str;
                 if let Some(value) = self.repeat_x_text.parse::<f64>().ok() {
-                    self.set_repeat_count_x(value);
+                    self.set_repeat_x(value);
                 }
             }
             GuiEvent::ChangedRepeatCountY(value_str) => {
                 self.repeat_y_text = value_str;
                 if let Some(value) = self.repeat_y_text.parse::<f64>().ok() {
-                    self.set_repeat_count_y(value);
+                    self.set_repeat_y(value);
                 }
             }
             GuiEvent::ChangedDimensionMillimeterX(value_str) => {
                 self.dim_mm_x_text = value_str;
                 if let Some(value) = self.dim_mm_x_text.parse::<f64>().ok() {
-                    self.set_dimension_millimeter_x(value);
+                    self.set_dim_mm_x(value);
                 }
             }
             GuiEvent::ChangedDimensionMillimeterY(value_str) => {
                 self.dim_mm_y_text = value_str;
                 if let Some(value) = self.dim_mm_y_text.parse::<f64>().ok() {
-                    self.set_dimension_millimeter_y(value);
+                    self.set_dim_mm_y(value);
                 }
             }
             GuiEvent::PressedStartButton => {
@@ -625,8 +545,7 @@ impl Application for RepeatyGui {
                             output_image_pixel_width,
                             output_image_pixel_height,
                             png_output_filepath,
-                        ) = get_output_pixel_width_height_filepath(
-                            image,
+                        ) = image.output_image_pixel_width_height_filepath(
                             self.repeat_x,
                             self.repeat_y,
                             self.dim_mm_x,
@@ -681,8 +600,7 @@ impl Application for RepeatyGui {
 
             let output_image_stats = {
                 let (output_image_pixel_width, output_image_pixel_height, png_output_filepath) =
-                    get_output_pixel_width_height_filepath(
-                        image,
+                    image.output_image_pixel_width_height_filepath(
                         self.repeat_x,
                         self.repeat_y,
                         self.dim_mm_x,
@@ -794,7 +712,7 @@ fn pretty_print_float(value: f64) -> String {
     }
 }
 
-fn draw_input_image_stats<'a>(image: &Image) -> Column<'a, GuiEvent> {
+fn draw_input_image_stats<'a>(image: &InputImage) -> Column<'a, GuiEvent> {
     let ppi = image.ppi.unwrap_or(DEFAULT_PPI);
     let (ppi_label_color, ppi_label_size) = get_ppi_label_size_and_color(ppi);
 
@@ -948,4 +866,75 @@ fn draw_textinput_fields<'a>(
                 .push(column_repeats)
                 .push(column_dimensions),
         )
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Main
+
+#[cfg(windows)]
+fn show_messagebox(caption: &str, message: &str, is_error: bool) {
+    use std::iter::once;
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr::null_mut;
+    use winapi::um::winuser::{MessageBoxW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK};
+
+    let caption_wide: Vec<u16> = std::ffi::OsStr::new(caption)
+        .encode_wide()
+        .chain(once(0))
+        .collect();
+    let message_wide: Vec<u16> = std::ffi::OsStr::new(message)
+        .encode_wide()
+        .chain(once(0))
+        .collect();
+
+    unsafe {
+        MessageBoxW(
+            null_mut(),
+            message_wide.as_ptr(),
+            caption_wide.as_ptr(),
+            MB_OK
+                | if is_error {
+                    MB_ICONERROR
+                } else {
+                    MB_ICONINFORMATION
+                },
+        )
+    };
+}
+
+fn init_logging(logfile_path: &str, loglevel: log::LevelFilter) -> Result<(), String> {
+    let logfile = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .append(false)
+        .open(logfile_path)
+        .map_err(|error| format!("Could not create logfile at '{}' : {}", logfile_path, error))?;
+
+    fern::Dispatch::new()
+        .format(|out, message, record| out.finish(format_args!("{}: {}", record.level(), message)))
+        .level(loglevel)
+        .chain(std::io::stdout())
+        .chain(logfile)
+        .apply()
+        .map_err(|error| format!("Could initialize logger: {}", error))?;
+
+    Ok(())
+}
+
+fn main() {
+    let logfile_path = system::path_join(&get_executable_dir(), "logging.txt");
+    if let Err(error) = init_logging(&logfile_path, log::LevelFilter::Error) {
+        show_messagebox(
+            main_launcher_info::LAUNCHER_WINDOW_TITLE,
+            &format!("Logger initialization failed : {}", error,),
+            true,
+        );
+        std::process::abort();
+    }
+
+    std::panic::set_hook(Box::new(|panic_info| {
+        log::error!("{}", panic_info);
+    }));
+
+    RepeatyGui::run(Settings::default());
 }
