@@ -879,6 +879,9 @@ fn draw_textinput_fields<'a>(
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Main
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Quick messagebox
+
 fn main() {
     let logfile_path = {
         let logfile_dir = system::get_appdata_dir(
@@ -889,10 +892,10 @@ fn main() {
         system::path_join(&logfile_dir, "logging.txt")
     };
     if let Err(error) = ct_lib::init_logging(&logfile_path, log::LevelFilter::Info) {
-        system::show_messagebox(
+        msgbox::create(
             main_launcher_info::LAUNCHER_WINDOW_TITLE,
             &format!("Logger initialization failed : {}", error,),
-            true,
+            msgbox::IconType::Error,
         );
         std::process::abort();
     }
