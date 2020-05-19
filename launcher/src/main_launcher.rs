@@ -428,10 +428,14 @@ enum GuiEvent {
 }
 
 enum ProcessState {
-    NoInput,
     Idle,
     Running,
     Finished,
+}
+impl Default for ProcessState {
+    fn default() -> Self {
+        ProcessState::Idle
+    }
 }
 
 fn get_image_width_height_pixel_per_mm(image: &Image) -> (f64, f64, f64) {
@@ -463,6 +467,7 @@ fn get_output_pixel_width_height_filepath(
     )
 }
 
+#[derive(Default)]
 struct RepeatyGui {
     image: Option<Image>,
 
@@ -493,25 +498,7 @@ struct RepeatyGui {
 
 impl RepeatyGui {
     fn new() -> RepeatyGui {
-        let mut result = RepeatyGui {
-            image: None,
-            repeat_x: 0.0,
-            repeat_y: 0.0,
-            dim_mm_x: 0.0,
-            dim_mm_y: 0.0,
-            repeat_x_text: "".to_string(),
-            repeat_y_text: "".to_string(),
-            dim_mm_x_text: "".to_string(),
-            dim_mm_y_text: "".to_string(),
-            start_button_widget: button::State::new(),
-            repeat_x_widget: text_input::State::new(),
-            repeat_y_widget: text_input::State::new(),
-            dim_mm_x_widget: text_input::State::new(),
-            dim_mm_y_widget: text_input::State::new(),
-            process_state: ProcessState::Idle,
-
-            current_error: None,
-        };
+        let mut result = RepeatyGui::default();
 
         if let Some(image_filepath) = get_image_filepath_from_commandline() {
             result.load_image(&image_filepath);
@@ -532,6 +519,7 @@ impl RepeatyGui {
         };
 
         self.image = Some(image);
+        self.process_state = ProcessState::Idle;
 
         if self.repeat_x <= 0.0
             || self.repeat_y <= 0.0
@@ -712,107 +700,94 @@ impl Application for RepeatyGui {
     }
 
     fn view(&mut self) -> Element<Self::Message> {
-        let input_image_stats = if let Some(image) = &self.image {
-            draw_input_image_stats(image)
-        } else {
-            Column::new()
+        let result = if let Some(image) = &self.image {
+            let input_image_stats = draw_input_image_stats(image);
+
+            let output_image_stats = {
+                let (output_image_pixel_width, output_image_pixel_height, png_output_filepath) =
+                    get_output_pixel_width_height_filepath(
+                        image,
+                        self.repeat_x,
+                        self.repeat_y,
+                        self.dim_mm_x,
+                        self.dim_mm_y,
+                    );
+                let ppi = image.ppi.unwrap_or(DEFAULT_PPI);
+                draw_output_image_stats(
+                    &png_output_filepath,
+                    ppi,
+                    output_image_pixel_width,
+                    output_image_pixel_height,
+                )
+            };
+
+            let input_fields = draw_textinput_fields(
+                &self.repeat_x_text,
+                &self.repeat_y_text,
+                &self.dim_mm_x_text,
+                &self.dim_mm_y_text,
+                &mut self.repeat_x_widget,
+                &mut self.repeat_y_widget,
+                &mut self.dim_mm_x_widget,
+                &mut self.dim_mm_y_widget,
+            );
+
+            let result = Column::new()
                 .spacing(10)
                 .padding(20)
                 .align_items(Align::Center)
-                .width(FillPortion(1))
+                .push(input_image_stats)
+                .push(input_fields)
+                .push(output_image_stats)
                 .push(
-                    Text::new("Please drag and drop an image into this window!")
-                        .horizontal_alignment(iced::HorizontalAlignment::Center)
-                        .size(30)
-                        .color(iced::Color::from_rgb(0.8, 0.0, 0.1))
-                        .width(FillPortion(1)),
-                )
-        };
-
-        let output_image_stats = if let Some(image) = &self.image {
-            let (output_image_pixel_width, output_image_pixel_height, png_output_filepath) =
-                get_output_pixel_width_height_filepath(
-                    image,
-                    self.repeat_x,
-                    self.repeat_y,
-                    self.dim_mm_x,
-                    self.dim_mm_y,
+                    Button::new(&mut self.start_button_widget, Text::new("Create Pattern"))
+                        .on_press(GuiEvent::PressedStartButton),
                 );
-            let ppi = image.ppi.unwrap_or(DEFAULT_PPI);
-            draw_output_image_stats(
-                &png_output_filepath,
-                ppi,
-                output_image_pixel_width,
-                output_image_pixel_height,
-            )
-        } else {
-            Column::new().spacing(10)
-        };
 
-        let input_fields = draw_textinput_fields(
-            &self.repeat_x_text,
-            &self.repeat_y_text,
-            &self.dim_mm_x_text,
-            &self.dim_mm_y_text,
-            &mut self.repeat_x_widget,
-            &mut self.repeat_y_widget,
-            &mut self.dim_mm_x_widget,
-            &mut self.dim_mm_y_widget,
-        );
-
-        let result = Column::new()
-            .spacing(10)
-            .padding(20)
-            .align_items(Align::Center)
-            .push(input_image_stats)
-            .push(input_fields)
-            .push(output_image_stats)
-            .push(
-                Button::new(&mut self.start_button_widget, Text::new("Create Pattern"))
-                    .on_press(GuiEvent::PressedStartButton),
-            );
-
-        let result = if let Some(error_message) = &self.current_error {
-            result.push(
-                Text::new(format!("Error: {}", error_message))
-                    .horizontal_alignment(iced::HorizontalAlignment::Center)
-                    .size(30)
-                    .color(iced::Color::from_rgb(0.8, 0.0, 0.1))
-                    .width(FillPortion(1)),
-            )
-        } else {
-            result
-        };
-
-        match self.process_state {
-            ProcessState::NoInput => result
-                .push(
-                    Text::new("Please drag and drop an image into this window!")
-                        .horizontal_alignment(iced::HorizontalAlignment::Center)
-                        .size(30)
-                        .color(iced::Color::from_rgb(0.8, 0.0, 0.1))
-                        .width(FillPortion(1)),
-                )
-                .into(),
-            ProcessState::Idle => result.into(),
-            ProcessState::Running => result
-                .push(
+            match self.process_state {
+                ProcessState::Idle => result,
+                ProcessState::Running => result.push(
                     Text::new("Creating pattern - please wait!")
                         .horizontal_alignment(iced::HorizontalAlignment::Center)
                         .size(30)
                         .color(iced::Color::from_rgb(0.0, 0.0, 0.5))
                         .width(FillPortion(1)),
-                )
-                .into(),
-            ProcessState::Finished => result
-                .push(
+                ),
+                ProcessState::Finished => result.push(
                     Text::new("Finished creating pattern. Enjoy!")
                         .horizontal_alignment(iced::HorizontalAlignment::Center)
                         .size(30)
                         .color(iced::Color::from_rgb(0.0, 0.5, 0.0))
                         .width(FillPortion(1)),
+                ),
+            }
+        } else {
+            Column::new()
+                .spacing(10)
+                .padding(20)
+                .align_items(Align::Center)
+                .push(
+                    Text::new("Please drag and drop an image into this window!")
+                        .horizontal_alignment(iced::HorizontalAlignment::Center)
+                        .vertical_alignment(iced::VerticalAlignment::Center)
+                        .size(30)
+                        .width(FillPortion(1))
+                        .height(FillPortion(1)),
                 )
-                .into(),
+        };
+
+        if let Some(error_message) = &self.current_error {
+            result
+                .push(
+                    Text::new(format!("Error: {}", error_message))
+                        .horizontal_alignment(iced::HorizontalAlignment::Center)
+                        .size(30)
+                        .color(iced::Color::from_rgb(0.8, 0.0, 0.1))
+                        .width(FillPortion(1)),
+                )
+                .into()
+        } else {
+            result.into()
         }
     }
 }
