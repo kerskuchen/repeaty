@@ -434,12 +434,24 @@ enum ProcessState {
     Finished,
 }
 
+fn get_image_width_height_pixel_per_mm(image: &Image) -> (f64, f64, f64) {
+    let width = image.bitmap.width as f64;
+    let height = image.bitmap.height as f64;
+    let pixel_per_mm = pixel_per_inch_in_pixel_per_millimeter(image.ppi.unwrap_or(72.0));
+    (width, height, pixel_per_mm)
+}
+
+fn get_output_pixel_width_height(
+    dim_x: f64,
+    dim_y: f64,
+    repeat_x: f64,
+    repeat_y: f64,
+) -> (f64, f64) {
+    (repeat_x * dim_x, repeat_y * dim_y)
+}
+
 struct RepeatyGui {
     image: Option<Image>,
-
-    input_image_pixels_per_millimeter: f64,
-    input_image_pixel_width: f64,
-    input_image_pixel_height: f64,
 
     output_image_pixel_width: f64,
     output_image_pixel_height: f64,
@@ -473,9 +485,6 @@ impl RepeatyGui {
     fn new() -> RepeatyGui {
         let mut result = RepeatyGui {
             image: None,
-            input_image_pixels_per_millimeter: 0.0,
-            input_image_pixel_width: 0.0,
-            input_image_pixel_height: 0.0,
             output_image_pixel_width: 0.0,
             output_image_pixel_height: 0.0,
             repeat_x: 0.0,
@@ -514,11 +523,6 @@ impl RepeatyGui {
             image_result.unwrap()
         };
 
-        self.input_image_pixels_per_millimeter =
-            pixel_per_inch_in_pixel_per_millimeter(image.ppi.unwrap_or(72.0));
-        self.input_image_pixel_width = image.bitmap.width as f64;
-        self.input_image_pixel_height = image.bitmap.height as f64;
-
         self.image = Some(image);
 
         if self.repeat_x <= 0.0
@@ -538,43 +542,59 @@ impl RepeatyGui {
     }
 
     fn set_repeat_count_x(&mut self, value: f64) {
-        self.repeat_x = value;
-        self.dim_x =
-            self.repeat_x * self.input_image_pixel_width / self.input_image_pixels_per_millimeter;
-        self.dim_x_text = pretty_print_float(self.dim_x);
+        if let Some(image) = &self.image {
+            let (input_width, _input_height, pixel_per_mm) =
+                get_image_width_height_pixel_per_mm(image);
 
-        self.output_image_pixel_width = self.repeat_x * self.input_image_pixel_width;
-        self.process_state = ProcessState::Idle;
+            self.repeat_x = value;
+            self.dim_x = self.repeat_x * input_width / pixel_per_mm;
+            self.dim_x_text = pretty_print_float(self.dim_x);
+
+            self.output_image_pixel_width = self.repeat_x * input_width;
+            self.process_state = ProcessState::Idle;
+        }
     }
 
     fn set_repeat_count_y(&mut self, value: f64) {
-        self.repeat_y = value;
-        self.dim_y =
-            self.repeat_y * self.input_image_pixel_height / self.input_image_pixels_per_millimeter;
-        self.dim_y_text = pretty_print_float(self.dim_y);
+        if let Some(image) = &self.image {
+            let (_input_width, input_height, pixel_per_mm) =
+                get_image_width_height_pixel_per_mm(image);
 
-        self.output_image_pixel_height = self.repeat_y * self.input_image_pixel_height;
-        self.process_state = ProcessState::Idle;
+            self.repeat_y = value;
+            self.dim_y = self.repeat_y * input_height / pixel_per_mm;
+            self.dim_y_text = pretty_print_float(self.dim_y);
+
+            self.output_image_pixel_height = self.repeat_y * input_height;
+            self.process_state = ProcessState::Idle;
+        }
     }
 
     fn set_dimension_millimeter_x(&mut self, value: f64) {
-        self.dim_x = value;
-        self.repeat_x =
-            self.dim_x * self.input_image_pixels_per_millimeter / self.input_image_pixel_width;
-        self.repeat_x_text = pretty_print_float(self.repeat_x);
+        if let Some(image) = &self.image {
+            let (input_width, _input_height, pixel_per_mm) =
+                get_image_width_height_pixel_per_mm(image);
 
-        self.output_image_pixel_width = self.repeat_x * self.input_image_pixel_width;
-        self.process_state = ProcessState::Idle;
+            self.dim_x = value;
+            self.repeat_x = self.dim_x * pixel_per_mm / input_width;
+            self.repeat_x_text = pretty_print_float(self.repeat_x);
+
+            self.output_image_pixel_width = self.repeat_x * input_width;
+            self.process_state = ProcessState::Idle;
+        }
     }
 
     fn set_dimension_millimeter_y(&mut self, value: f64) {
-        self.dim_y = value;
-        self.repeat_y =
-            self.dim_y * self.input_image_pixels_per_millimeter / self.input_image_pixel_height;
-        self.repeat_y_text = pretty_print_float(self.repeat_y);
+        if let Some(image) = &self.image {
+            let (_input_width, input_height, pixel_per_mm) =
+                get_image_width_height_pixel_per_mm(image);
 
-        self.output_image_pixel_height = self.repeat_y * self.input_image_pixel_height;
-        self.process_state = ProcessState::Idle;
+            self.dim_y = value;
+            self.repeat_y = self.dim_y * pixel_per_mm / input_height;
+            self.repeat_y_text = pretty_print_float(self.repeat_y);
+
+            self.output_image_pixel_height = self.repeat_y * input_height;
+            self.process_state = ProcessState::Idle;
+        }
     }
 }
 
@@ -892,21 +912,24 @@ fn draw_output_image_stats<'a>(
         )
 }
 
-fn draw_textinput_field<'a>(
+fn draw_textinput_field<'a, OnChangeEvent>(
     label_text: &str,
     input_text: &str,
     input_widget: &'a mut iced::text_input::State,
-) -> Row<'a, GuiEvent> {
+    on_change: OnChangeEvent,
+) -> Row<'a, GuiEvent>
+where
+    OnChangeEvent: 'static + Fn(String) -> GuiEvent,
+{
     let (label_color, label_size) = get_label_size_and_color(&input_text);
     let repeat_count_x_label = Text::new(label_text.to_string() + ": ")
         .size(label_size)
         .color(label_color)
         .width(FillPortion(1));
-    let repeat_count_x_input =
-        TextInput::new(input_widget, "", &input_text, GuiEvent::ChangedRepeatCountX)
-            .padding(15)
-            .size(label_size)
-            .width(FillPortion(1));
+    let repeat_count_x_input = TextInput::new(input_widget, "", &input_text, on_change)
+        .padding(15)
+        .size(label_size)
+        .width(FillPortion(1));
 
     Row::new()
         .padding(20)
@@ -925,10 +948,30 @@ fn draw_textinput_fields<'a>(
     repeat_x_widget: &'a mut iced::text_input::State,
     repeat_y_widget: &'a mut iced::text_input::State,
 ) -> Column<'a, GuiEvent> {
-    let repeat_x = draw_textinput_field("Repeat horizontal", repeat_x_text, repeat_x_widget);
-    let repeat_y = draw_textinput_field("Repeat vertical", repeat_y_text, repeat_y_widget);
-    let dim_x = draw_textinput_field("Image width (mm)", dim_x_text, dim_x_widget);
-    let dim_y = draw_textinput_field("Image height (mm)", dim_y_text, dim_y_widget);
+    let repeat_x = draw_textinput_field(
+        "Repeat horizontal",
+        repeat_x_text,
+        repeat_x_widget,
+        GuiEvent::ChangedRepeatCountX,
+    );
+    let repeat_y = draw_textinput_field(
+        "Repeat vertical",
+        repeat_y_text,
+        repeat_y_widget,
+        GuiEvent::ChangedRepeatCountY,
+    );
+    let dim_x = draw_textinput_field(
+        "Image width (mm)",
+        dim_x_text,
+        dim_x_widget,
+        GuiEvent::ChangedDimensionMillimeterX,
+    );
+    let dim_y = draw_textinput_field(
+        "Image height (mm)",
+        dim_y_text,
+        dim_y_widget,
+        GuiEvent::ChangedDimensionMillimeterY,
+    );
 
     let column_repeats = Column::new()
         .padding(10)
