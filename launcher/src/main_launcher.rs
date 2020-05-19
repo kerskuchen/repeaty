@@ -441,40 +441,50 @@ fn get_image_width_height_pixel_per_mm(image: &Image) -> (f64, f64, f64) {
     (width, height, pixel_per_mm)
 }
 
-fn get_output_pixel_width_height(
-    dim_x: f64,
-    dim_y: f64,
+fn get_output_pixel_width_height_filepath(
+    image: &Image,
     repeat_x: f64,
     repeat_y: f64,
-) -> (f64, f64) {
-    (repeat_x * dim_x, repeat_y * dim_y)
+    dim_mm_x: f64,
+    dim_mm_y: f64,
+) -> (i32, i32, String) {
+    let suffix_text = format!(
+        "__{}x{}__{}x{}mm",
+        pretty_print_float(repeat_x),
+        pretty_print_float(repeat_y),
+        pretty_print_float(dim_mm_x),
+        pretty_print_float(dim_mm_y)
+    );
+    let png_output_filepath = get_image_output_filepath(&image.filepath, &suffix_text) + ".png";
+    (
+        (repeat_x * image.bitmap.width as f64).round() as i32,
+        (repeat_y * image.bitmap.height as f64).round() as i32,
+        png_output_filepath,
+    )
 }
 
 struct RepeatyGui {
     image: Option<Image>,
 
-    output_image_pixel_width: f64,
-    output_image_pixel_height: f64,
-
     repeat_x: f64,
     repeat_y: f64,
 
-    dim_x: f64,
-    dim_y: f64,
+    dim_mm_x: f64,
+    dim_mm_y: f64,
 
     repeat_x_text: String,
     repeat_y_text: String,
 
-    dim_x_text: String,
-    dim_y_text: String,
+    dim_mm_x_text: String,
+    dim_mm_y_text: String,
 
     start_button_widget: button::State,
 
     repeat_x_widget: text_input::State,
     repeat_y_widget: text_input::State,
 
-    dim_x_widget: text_input::State,
-    dim_y_widget: text_input::State,
+    dim_mm_x_widget: text_input::State,
+    dim_mm_y_widget: text_input::State,
 
     process_state: ProcessState,
 
@@ -485,21 +495,19 @@ impl RepeatyGui {
     fn new() -> RepeatyGui {
         let mut result = RepeatyGui {
             image: None,
-            output_image_pixel_width: 0.0,
-            output_image_pixel_height: 0.0,
             repeat_x: 0.0,
             repeat_y: 0.0,
-            dim_x: 0.0,
-            dim_y: 0.0,
+            dim_mm_x: 0.0,
+            dim_mm_y: 0.0,
             repeat_x_text: "".to_string(),
             repeat_y_text: "".to_string(),
-            dim_x_text: "".to_string(),
-            dim_y_text: "".to_string(),
+            dim_mm_x_text: "".to_string(),
+            dim_mm_y_text: "".to_string(),
             start_button_widget: button::State::new(),
             repeat_x_widget: text_input::State::new(),
             repeat_y_widget: text_input::State::new(),
-            dim_x_widget: text_input::State::new(),
-            dim_y_widget: text_input::State::new(),
+            dim_mm_x_widget: text_input::State::new(),
+            dim_mm_y_widget: text_input::State::new(),
             process_state: ProcessState::Idle,
 
             current_error: None,
@@ -527,12 +535,12 @@ impl RepeatyGui {
 
         if self.repeat_x <= 0.0
             || self.repeat_y <= 0.0
-            || self.dim_x <= 0.0
-            || self.dim_y <= 0.0
+            || self.dim_mm_x <= 0.0
+            || self.dim_mm_y <= 0.0
             || self.repeat_x.is_nan()
             || self.repeat_y.is_nan()
-            || self.dim_x.is_nan()
-            || self.dim_y.is_nan()
+            || self.dim_mm_x.is_nan()
+            || self.dim_mm_y.is_nan()
         {
             self.set_repeat_count_x(5.0);
             self.set_repeat_count_y(5.0);
@@ -547,10 +555,9 @@ impl RepeatyGui {
                 get_image_width_height_pixel_per_mm(image);
 
             self.repeat_x = value;
-            self.dim_x = self.repeat_x * input_width / pixel_per_mm;
-            self.dim_x_text = pretty_print_float(self.dim_x);
+            self.dim_mm_x = self.repeat_x * input_width / pixel_per_mm;
+            self.dim_mm_x_text = pretty_print_float(self.dim_mm_x);
 
-            self.output_image_pixel_width = self.repeat_x * input_width;
             self.process_state = ProcessState::Idle;
         }
     }
@@ -561,10 +568,9 @@ impl RepeatyGui {
                 get_image_width_height_pixel_per_mm(image);
 
             self.repeat_y = value;
-            self.dim_y = self.repeat_y * input_height / pixel_per_mm;
-            self.dim_y_text = pretty_print_float(self.dim_y);
+            self.dim_mm_y = self.repeat_y * input_height / pixel_per_mm;
+            self.dim_mm_y_text = pretty_print_float(self.dim_mm_y);
 
-            self.output_image_pixel_height = self.repeat_y * input_height;
             self.process_state = ProcessState::Idle;
         }
     }
@@ -574,11 +580,10 @@ impl RepeatyGui {
             let (input_width, _input_height, pixel_per_mm) =
                 get_image_width_height_pixel_per_mm(image);
 
-            self.dim_x = value;
-            self.repeat_x = self.dim_x * pixel_per_mm / input_width;
+            self.dim_mm_x = value;
+            self.repeat_x = self.dim_mm_x * pixel_per_mm / input_width;
             self.repeat_x_text = pretty_print_float(self.repeat_x);
 
-            self.output_image_pixel_width = self.repeat_x * input_width;
             self.process_state = ProcessState::Idle;
         }
     }
@@ -588,11 +593,10 @@ impl RepeatyGui {
             let (_input_width, input_height, pixel_per_mm) =
                 get_image_width_height_pixel_per_mm(image);
 
-            self.dim_y = value;
-            self.repeat_y = self.dim_y * pixel_per_mm / input_height;
+            self.dim_mm_y = value;
+            self.repeat_y = self.dim_mm_y * pixel_per_mm / input_height;
             self.repeat_y_text = pretty_print_float(self.repeat_y);
 
-            self.output_image_pixel_height = self.repeat_y * input_height;
             self.process_state = ProcessState::Idle;
         }
     }
@@ -626,14 +630,14 @@ impl Application for RepeatyGui {
                 }
             }
             GuiEvent::ChangedDimensionMillimeterX(value_str) => {
-                self.dim_x_text = value_str;
-                if let Some(value) = self.dim_x_text.parse::<f64>().ok() {
+                self.dim_mm_x_text = value_str;
+                if let Some(value) = self.dim_mm_x_text.parse::<f64>().ok() {
                     self.set_dimension_millimeter_x(value);
                 }
             }
             GuiEvent::ChangedDimensionMillimeterY(value_str) => {
-                self.dim_y_text = value_str;
-                if let Some(value) = self.dim_y_text.parse::<f64>().ok() {
+                self.dim_mm_y_text = value_str;
+                if let Some(value) = self.dim_mm_y_text.parse::<f64>().ok() {
                     self.set_dimension_millimeter_y(value);
                 }
             }
@@ -641,30 +645,30 @@ impl Application for RepeatyGui {
                 if let Some(image) = &self.image {
                     if self.repeat_x <= 0.0
                         || self.repeat_y <= 0.0
-                        || self.dim_x <= 0.0
-                        || self.dim_y <= 0.0
+                        || self.dim_mm_x <= 0.0
+                        || self.dim_mm_y <= 0.0
                         || self.repeat_x.is_nan()
                         || self.repeat_y.is_nan()
-                        || self.dim_x.is_nan()
-                        || self.dim_y.is_nan()
+                        || self.dim_mm_x.is_nan()
+                        || self.dim_mm_y.is_nan()
                     {
                         self.current_error =
                             Some("Some of the input values above are incorrect".to_string());
                     } else {
                         self.process_state = ProcessState::Running;
 
-                        let output_image_pixel_width = self.output_image_pixel_width.round() as i32;
-                        let output_image_pixel_height =
-                            self.output_image_pixel_height.round() as i32;
-                        let suffix_text = format!(
-                            "__{}x{}__{}x{}mm",
-                            pretty_print_float(self.repeat_x),
-                            pretty_print_float(self.repeat_y),
-                            pretty_print_float(self.dim_x),
-                            pretty_print_float(self.dim_y)
+                        let (
+                            output_image_pixel_width,
+                            output_image_pixel_height,
+                            png_output_filepath,
+                        ) = get_output_pixel_width_height_filepath(
+                            image,
+                            self.repeat_x,
+                            self.repeat_y,
+                            self.dim_mm_x,
+                            self.dim_mm_y,
                         );
-                        let png_output_filepath =
-                            get_image_output_filepath(&image.filepath, &suffix_text) + ".png";
+
                         if let Err(error_message) = create_pattern_png(
                             &png_output_filepath,
                             &image.bitmap,
@@ -726,18 +730,15 @@ impl Application for RepeatyGui {
         };
 
         let output_image_stats = if let Some(image) = &self.image {
-            let output_image_pixel_width = self.output_image_pixel_width.round() as i32;
-            let output_image_pixel_height = self.output_image_pixel_height.round() as i32;
-            let suffix_text = format!(
-                "__{}x{}__{}x{}mm",
-                pretty_print_float(self.repeat_x),
-                pretty_print_float(self.repeat_y),
-                pretty_print_float(self.dim_x),
-                pretty_print_float(self.dim_y)
-            );
+            let (output_image_pixel_width, output_image_pixel_height, png_output_filepath) =
+                get_output_pixel_width_height_filepath(
+                    image,
+                    self.repeat_x,
+                    self.repeat_y,
+                    self.dim_mm_x,
+                    self.dim_mm_y,
+                );
             let ppi = image.ppi.unwrap_or(DEFAULT_PPI);
-            let png_output_filepath =
-                get_image_output_filepath(&image.filepath, &suffix_text) + ".png";
             draw_output_image_stats(
                 &png_output_filepath,
                 ppi,
@@ -751,12 +752,12 @@ impl Application for RepeatyGui {
         let input_fields = draw_textinput_fields(
             &self.repeat_x_text,
             &self.repeat_y_text,
-            &self.dim_x_text,
-            &self.dim_y_text,
+            &self.dim_mm_x_text,
+            &self.dim_mm_y_text,
             &mut self.repeat_x_widget,
             &mut self.repeat_y_widget,
-            &mut self.dim_x_widget,
-            &mut self.dim_y_widget,
+            &mut self.dim_mm_x_widget,
+            &mut self.dim_mm_y_widget,
         );
 
         let result = Column::new()
