@@ -415,30 +415,7 @@ const LABEL_SIZE_DEFAULT: u16 = 20;
 const LABEL_SIZE_INVALID: u16 = 25;
 const COLOR_DEFAULT: iced::Color = iced::Color::BLACK;
 const COLOR_INVALID: iced::Color = iced::Color::from_rgb(1.0, 0.0, 0.0);
-
-fn get_label_size_and_color(text: &str) -> (iced::Color, u16) {
-    if let Some(value) = text.parse::<f64>().ok() {
-        if value > 0.0 {
-            return (COLOR_DEFAULT, LABEL_SIZE_DEFAULT);
-        }
-    }
-    (COLOR_INVALID, LABEL_SIZE_INVALID)
-}
-fn get_ppi_label_size_and_color(ppi: f64) -> (iced::Color, u16) {
-    if (ppi - 300.0).abs() <= 0.1 {
-        (COLOR_DEFAULT, LABEL_SIZE_DEFAULT)
-    } else {
-        (COLOR_INVALID, LABEL_SIZE_INVALID)
-    }
-}
-
-fn pretty_print_float(value: f64) -> String {
-    if (value - value.round()).abs() < 0.01 {
-        format!("{:.0}", value.round())
-    } else {
-        format!("{:.2}", value)
-    }
-}
+const DEFAULT_PPI: f64 = 72.0;
 
 #[derive(Debug, Clone)]
 enum GuiEvent {
@@ -711,45 +688,8 @@ impl Application for RepeatyGui {
     }
 
     fn view(&mut self) -> Element<Self::Message> {
-        let (ppi_label_color, ppi_label_size) = get_ppi_label_size_and_color(
-            pixel_per_millimeter_in_pixel_per_inch(self.input_image_pixels_per_millimeter),
-        );
         let input_image_stats = if let Some(image) = &self.image {
-            Column::new()
-                .spacing(10)
-                .padding(20)
-                .align_items(Align::Center)
-                .width(FillPortion(1))
-                .push(
-                    Text::new("Input image:".to_string())
-                        .horizontal_alignment(iced::HorizontalAlignment::Left)
-                        .size(LABEL_SIZE_DEFAULT + 5)
-                        .color(COLOR_DEFAULT),
-                )
-                .push(
-                    Text::new(image.filepath.to_string())
-                        .size(LABEL_SIZE_DEFAULT)
-                        .color(COLOR_DEFAULT),
-                )
-                .push(
-                    Text::new(format!(
-                        "{:.0}x{:.0}",
-                        self.input_image_pixel_width, self.input_image_pixel_height
-                    ))
-                    .horizontal_alignment(iced::HorizontalAlignment::Left)
-                    .size(LABEL_SIZE_DEFAULT),
-                )
-                .push(
-                    Text::new(format!(
-                        "DPI: {}",
-                        pretty_print_float(pixel_per_millimeter_in_pixel_per_inch(
-                            self.input_image_pixels_per_millimeter
-                        ))
-                    ))
-                    .horizontal_alignment(iced::HorizontalAlignment::Left)
-                    .size(ppi_label_size)
-                    .color(ppi_label_color),
-                )
+            draw_input_image_stats(image)
         } else {
             Column::new()
                 .spacing(10)
@@ -775,162 +715,36 @@ impl Application for RepeatyGui {
                 pretty_print_float(self.dim_x),
                 pretty_print_float(self.dim_y)
             );
+            let ppi = image.ppi.unwrap_or(DEFAULT_PPI);
             let png_output_filepath =
                 get_image_output_filepath(&image.filepath, &suffix_text) + ".png";
-            Column::new()
-                .spacing(10)
-                .padding(20)
-                .align_items(Align::Center)
-                .width(FillPortion(1))
-                .push(
-                    Text::new("Output image:".to_string())
-                        .horizontal_alignment(iced::HorizontalAlignment::Left)
-                        .size(LABEL_SIZE_DEFAULT + 5)
-                        .color(COLOR_DEFAULT),
-                )
-                .push(
-                    Text::new(system::path_to_filename(&png_output_filepath))
-                        .size(LABEL_SIZE_DEFAULT)
-                        .color(COLOR_DEFAULT),
-                )
-                .push(
-                    Text::new(format!(
-                        "{}x{}",
-                        output_image_pixel_width, output_image_pixel_height
-                    ))
-                    .horizontal_alignment(iced::HorizontalAlignment::Left)
-                    .size(LABEL_SIZE_DEFAULT),
-                )
-                .push(
-                    Text::new(format!(
-                        "DPI: {}",
-                        pretty_print_float(pixel_per_millimeter_in_pixel_per_inch(
-                            self.input_image_pixels_per_millimeter
-                        ))
-                    ))
-                    .horizontal_alignment(iced::HorizontalAlignment::Left)
-                    .size(ppi_label_size)
-                    .color(ppi_label_color),
-                )
+            draw_output_image_stats(
+                &png_output_filepath,
+                ppi,
+                output_image_pixel_width,
+                output_image_pixel_height,
+            )
         } else {
             Column::new().spacing(10)
         };
 
-        let repeat_count_x = {
-            let (label_color, label_size) = get_label_size_and_color(&self.repeat_x_text);
-            let repeat_count_x_label = Text::new("Repeat horizontal: ")
-                .size(label_size)
-                .color(label_color)
-                .width(FillPortion(1));
-            let repeat_count_x_input = TextInput::new(
-                &mut self.repeat_x_widget,
-                "",
-                &self.repeat_x_text,
-                GuiEvent::ChangedRepeatCountX,
-            )
-            .padding(15)
-            .size(label_size)
-            .width(FillPortion(1));
-
-            Row::new()
-                .padding(20)
-                .align_items(Align::Center)
-                .push(repeat_count_x_label)
-                .push(repeat_count_x_input)
-        };
-
-        let repeat_count_y = {
-            let (label_color, label_size) = get_label_size_and_color(&self.repeat_y_text);
-            let repeat_count_y_label = Text::new("Repeat vertical: ")
-                .size(label_size)
-                .color(label_color)
-                .width(FillPortion(1));
-            let repeat_count_y_input = TextInput::new(
-                &mut self.repeat_y_widget,
-                "",
-                &self.repeat_y_text,
-                GuiEvent::ChangedRepeatCountY,
-            )
-            .padding(15)
-            .size(label_size)
-            .width(FillPortion(1));
-
-            Row::new()
-                .padding(20)
-                .align_items(Align::Center)
-                .push(repeat_count_y_label)
-                .push(repeat_count_y_input)
-        };
-
-        let dimension_mm_x = {
-            let (label_color, label_size) = get_label_size_and_color(&self.dim_x_text);
-            let dimension_mm_x_label = Text::new("Image width (mm): ")
-                .size(label_size)
-                .color(label_color)
-                .width(FillPortion(1));
-            let dimension_mm_x_input = TextInput::new(
-                &mut self.dim_x_widget,
-                "",
-                &self.dim_x_text,
-                GuiEvent::ChangedDimensionMillimeterX,
-            )
-            .padding(15)
-            .size(label_size)
-            .width(FillPortion(1));
-
-            Row::new()
-                .padding(20)
-                .align_items(Align::Center)
-                .push(dimension_mm_x_label)
-                .push(dimension_mm_x_input)
-        };
-        let dimension_mm_y = {
-            let (label_color, label_size) = get_label_size_and_color(&self.dim_y_text);
-            let dimension_mm_y_label = Text::new("Image height (mm): ")
-                .size(label_size)
-                .color(label_color)
-                .width(FillPortion(1));
-            let dimension_mm_y_input = TextInput::new(
-                &mut self.dim_y_widget,
-                "",
-                &self.dim_y_text,
-                GuiEvent::ChangedDimensionMillimeterY,
-            )
-            .padding(15)
-            .size(label_size)
-            .width(FillPortion(1));
-
-            Row::new()
-                .padding(20)
-                .align_items(Align::Center)
-                .push(dimension_mm_y_label)
-                .push(dimension_mm_y_input)
-        };
-
-        let column_repeats = Column::new()
-            .padding(10)
-            .align_items(Align::Center)
-            .width(FillPortion(1))
-            .push(repeat_count_x)
-            .push(repeat_count_y);
-        let column_dimensions = Column::new()
-            .padding(10)
-            .align_items(Align::Center)
-            .width(FillPortion(1))
-            .push(dimension_mm_x)
-            .push(dimension_mm_y);
+        let input_fields = draw_textinput_fields(
+            &self.repeat_x_text,
+            &self.repeat_y_text,
+            &self.dim_x_text,
+            &self.dim_y_text,
+            &mut self.repeat_x_widget,
+            &mut self.repeat_y_widget,
+            &mut self.dim_x_widget,
+            &mut self.dim_y_widget,
+        );
 
         let result = Column::new()
             .spacing(10)
             .padding(20)
             .align_items(Align::Center)
             .push(input_image_stats)
-            .push(
-                Row::new()
-                    .align_items(Align::Center)
-                    .push(column_repeats)
-                    .push(column_dimensions),
-            )
+            .push(input_fields)
             .push(output_image_stats)
             .push(
                 Button::new(&mut self.start_button_widget, Text::new("Create Pattern"))
@@ -980,4 +794,163 @@ impl Application for RepeatyGui {
                 .into(),
         }
     }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Draw Elements
+
+fn get_label_size_and_color(text: &str) -> (iced::Color, u16) {
+    if let Some(value) = text.parse::<f64>().ok() {
+        if value > 0.0 {
+            return (COLOR_DEFAULT, LABEL_SIZE_DEFAULT);
+        }
+    }
+    (COLOR_INVALID, LABEL_SIZE_INVALID)
+}
+fn get_ppi_label_size_and_color(ppi: f64) -> (iced::Color, u16) {
+    if (ppi - 300.0).abs() <= 0.1 {
+        (COLOR_DEFAULT, LABEL_SIZE_DEFAULT)
+    } else {
+        (COLOR_INVALID, LABEL_SIZE_INVALID)
+    }
+}
+fn pretty_print_float(value: f64) -> String {
+    if (value - value.round()).abs() < 0.01 {
+        format!("{:.0}", value.round())
+    } else {
+        format!("{:.2}", value)
+    }
+}
+
+fn draw_input_image_stats<'a>(image: &Image) -> Column<'a, GuiEvent> {
+    let ppi = image.ppi.unwrap_or(DEFAULT_PPI);
+    let (ppi_label_color, ppi_label_size) = get_ppi_label_size_and_color(ppi);
+
+    Column::new()
+        .spacing(10)
+        .padding(20)
+        .align_items(Align::Center)
+        .width(FillPortion(1))
+        .push(
+            Text::new("Input image:".to_string())
+                .horizontal_alignment(iced::HorizontalAlignment::Left)
+                .size(LABEL_SIZE_DEFAULT + 5)
+                .color(COLOR_DEFAULT),
+        )
+        .push(
+            Text::new(image.filepath.to_string())
+                .size(LABEL_SIZE_DEFAULT)
+                .color(COLOR_DEFAULT),
+        )
+        .push(
+            Text::new(format!("{}x{}", image.bitmap.width, image.bitmap.height))
+                .horizontal_alignment(iced::HorizontalAlignment::Left)
+                .size(LABEL_SIZE_DEFAULT),
+        )
+        .push(
+            Text::new(format!("DPI: {}", pretty_print_float(ppi)))
+                .horizontal_alignment(iced::HorizontalAlignment::Left)
+                .size(ppi_label_size)
+                .color(ppi_label_color),
+        )
+}
+
+fn draw_output_image_stats<'a>(
+    filepath: &str,
+    ppi: f64,
+    pixel_width: i32,
+    pixel_height: i32,
+) -> Column<'a, GuiEvent> {
+    let (ppi_label_color, ppi_label_size) = get_ppi_label_size_and_color(ppi);
+
+    Column::new()
+        .spacing(10)
+        .padding(20)
+        .align_items(Align::Center)
+        .width(FillPortion(1))
+        .push(
+            Text::new("Output image:".to_string())
+                .horizontal_alignment(iced::HorizontalAlignment::Left)
+                .size(LABEL_SIZE_DEFAULT + 5)
+                .color(COLOR_DEFAULT),
+        )
+        .push(
+            Text::new(system::path_to_filename(&filepath))
+                .size(LABEL_SIZE_DEFAULT)
+                .color(COLOR_DEFAULT),
+        )
+        .push(
+            Text::new(format!("{}x{}", pixel_width, pixel_height))
+                .horizontal_alignment(iced::HorizontalAlignment::Left)
+                .size(LABEL_SIZE_DEFAULT),
+        )
+        .push(
+            Text::new(format!("DPI: {}", ppi))
+                .horizontal_alignment(iced::HorizontalAlignment::Left)
+                .size(ppi_label_size)
+                .color(ppi_label_color),
+        )
+}
+
+fn draw_textinput_field<'a>(
+    label_text: &str,
+    input_text: &str,
+    input_widget: &'a mut iced::text_input::State,
+) -> Row<'a, GuiEvent> {
+    let (label_color, label_size) = get_label_size_and_color(&input_text);
+    let repeat_count_x_label = Text::new(label_text.to_string() + ": ")
+        .size(label_size)
+        .color(label_color)
+        .width(FillPortion(1));
+    let repeat_count_x_input =
+        TextInput::new(input_widget, "", &input_text, GuiEvent::ChangedRepeatCountX)
+            .padding(15)
+            .size(label_size)
+            .width(FillPortion(1));
+
+    Row::new()
+        .padding(20)
+        .align_items(Align::Center)
+        .push(repeat_count_x_label)
+        .push(repeat_count_x_input)
+}
+
+fn draw_textinput_fields<'a>(
+    repeat_x_text: &str,
+    repeat_y_text: &str,
+    dim_x_text: &str,
+    dim_y_text: &str,
+    dim_x_widget: &'a mut iced::text_input::State,
+    dim_y_widget: &'a mut iced::text_input::State,
+    repeat_x_widget: &'a mut iced::text_input::State,
+    repeat_y_widget: &'a mut iced::text_input::State,
+) -> Column<'a, GuiEvent> {
+    let repeat_x = draw_textinput_field("Repeat horizontal", repeat_x_text, repeat_x_widget);
+    let repeat_y = draw_textinput_field("Repeat vertical", repeat_y_text, repeat_y_widget);
+    let dim_x = draw_textinput_field("Image width (mm)", dim_x_text, dim_x_widget);
+    let dim_y = draw_textinput_field("Image height (mm)", dim_y_text, dim_y_widget);
+
+    let column_repeats = Column::new()
+        .padding(10)
+        .align_items(Align::Center)
+        .width(FillPortion(1))
+        .push(repeat_x)
+        .push(repeat_y);
+    let column_dimensions = Column::new()
+        .padding(10)
+        .align_items(Align::Center)
+        .width(FillPortion(1))
+        .push(dim_x)
+        .push(dim_y);
+
+    Column::new()
+        .spacing(10)
+        .padding(20)
+        .align_items(Align::Center)
+        .push(
+            Row::new()
+                .align_items(Align::Center)
+                .push(column_repeats)
+                .push(column_dimensions),
+        )
 }
