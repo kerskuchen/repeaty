@@ -18,10 +18,6 @@ mod main_launcher_info;
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Unit conversion
 
-fn millimeter_in_meter(millimeter: f64) -> f64 {
-    millimeter * (1.0 / 1000.0)
-}
-
 fn meter_in_millimeter(meter: f64) -> f64 {
     meter * 1000.0
 }
@@ -38,28 +34,8 @@ fn meter_in_inch(meter: f64) -> f64 {
     millimeter_in_inch(meter_in_millimeter(meter))
 }
 
-fn inch_in_meter(inch: f64) -> f64 {
-    millimeter_in_meter(inch_in_millimeter(inch))
-}
-
-fn pixel_per_millimeter_in_pixel_per_meter(pixels_per_millimeter: f64) -> f64 {
-    pixels_per_millimeter / millimeter_in_meter(1.0)
-}
-
-fn pixel_per_meter_in_pixel_per_millimeter(pixels_per_meter: f64) -> f64 {
-    pixels_per_meter / meter_in_millimeter(1.0)
-}
-
 fn pixel_per_meter_in_pixel_per_inch(pixels_per_meter: f64) -> f64 {
     pixels_per_meter / meter_in_inch(1.0)
-}
-
-fn pixel_per_inch_in_pixel_per_meter(pixels_per_inch: f64) -> f64 {
-    pixels_per_inch / inch_in_meter(1.0)
-}
-
-fn pixel_per_millimeter_in_pixel_per_inch(pixels_per_millimeter: f64) -> f64 {
-    pixels_per_millimeter / millimeter_in_inch(1.0)
 }
 
 fn pixel_per_inch_in_pixel_per_millimeter(pixels_per_inch: f64) -> f64 {
