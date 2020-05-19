@@ -47,7 +47,7 @@ fn pixel_per_inch_in_pixel_per_millimeter(pixels_per_inch: f64) -> f64 {
 
 fn get_executable_dir() -> String {
     if let Some(executable_path) = std::env::current_exe().ok() {
-        system::path_without_filename(executable_path.to_string_borrowed())
+        system::path_without_filename(executable_path.to_string_borrowed_or_panic())
     } else {
         ".".to_owned()
     }
@@ -571,7 +571,7 @@ impl Application for RepeatyGui {
             GuiEvent::WindowEvent(window_event) => match window_event {
                 iced_native::Event::Window(window_event) => match window_event {
                     iced_native::window::Event::FileDropped(filepath) => {
-                        self.load_image(&filepath.to_string_borrowed());
+                        self.load_image(&filepath.to_string_borrowed_or_panic());
                     }
                     _ => {}
                 },
@@ -596,25 +596,16 @@ impl Application for RepeatyGui {
 
     fn view(&mut self) -> Element<Self::Message> {
         let result = if let Some(image) = &self.image {
+            // We have an image already loaded
+
             let input_image_stats = draw_input_image_stats(image);
-
-            let output_image_stats = {
-                let (output_image_pixel_width, output_image_pixel_height, png_output_filepath) =
-                    image.output_image_pixel_width_height_filepath(
-                        self.repeat_x,
-                        self.repeat_y,
-                        self.dim_mm_x,
-                        self.dim_mm_y,
-                    );
-                let ppi = image.ppi.unwrap_or(DEFAULT_PPI);
-                draw_output_image_stats(
-                    &png_output_filepath,
-                    ppi,
-                    output_image_pixel_width,
-                    output_image_pixel_height,
-                )
-            };
-
+            let output_image_stats = draw_output_image_stats(
+                image,
+                self.repeat_x,
+                self.repeat_y,
+                self.dim_mm_x,
+                self.dim_mm_y,
+            );
             let input_fields = draw_textinput_fields(
                 &self.repeat_x_text,
                 &self.repeat_y_text,
@@ -638,30 +629,38 @@ impl Application for RepeatyGui {
                         .on_press(GuiEvent::PressedStartButton),
                 );
 
+            // Add processing state message
             match self.process_state {
                 ProcessState::Idle => result,
-                ProcessState::Running => result.push(
-                    Text::new("Creating pattern - please wait!")
-                        .horizontal_alignment(iced::HorizontalAlignment::Center)
-                        .size(30)
-                        .color(iced::Color::from_rgb(0.0, 0.0, 0.5))
-                        .width(FillPortion(1)),
-                ),
-                ProcessState::Finished => result.push(
-                    Text::new("Finished creating pattern. Enjoy!")
-                        .horizontal_alignment(iced::HorizontalAlignment::Center)
-                        .size(30)
-                        .color(iced::Color::from_rgb(0.0, 0.5, 0.0))
-                        .width(FillPortion(1)),
-                ),
+                ProcessState::Running => result
+                    .push(iced::Space::with_height(iced::Length::Units(20)))
+                    .push(
+                        Text::new("Creating pattern ...")
+                            .horizontal_alignment(iced::HorizontalAlignment::Center)
+                            .vertical_alignment(iced::VerticalAlignment::Bottom)
+                            .size(30)
+                            .color(iced::Color::from_rgb(0.0, 0.0, 0.5))
+                            .width(FillPortion(1)),
+                    ),
+                ProcessState::Finished => result
+                    .push(iced::Space::with_height(iced::Length::Units(20)))
+                    .push(
+                        Text::new("Finished creating pattern. Enjoy!")
+                            .horizontal_alignment(iced::HorizontalAlignment::Center)
+                            .vertical_alignment(iced::VerticalAlignment::Bottom)
+                            .size(30)
+                            .color(iced::Color::from_rgb(0.0, 0.5, 0.0))
+                            .width(FillPortion(1)),
+                    ),
             }
         } else {
+            // We have no image loaded
             Column::new()
                 .spacing(10)
                 .padding(20)
                 .align_items(Align::Center)
                 .push(
-                    Text::new("Please drag and drop an image into this window!")
+                    Text::new("Please drag and drop an image into this window")
                         .horizontal_alignment(iced::HorizontalAlignment::Center)
                         .vertical_alignment(iced::VerticalAlignment::Center)
                         .size(30)
@@ -670,11 +669,14 @@ impl Application for RepeatyGui {
                 )
         };
 
+        // Add error message if necessary
         if let Some(error_message) = &self.current_error {
             result
+                .push(iced::Space::with_height(iced::Length::Units(20)))
                 .push(
                     Text::new(format!("Error: {}", error_message))
                         .horizontal_alignment(iced::HorizontalAlignment::Center)
+                        .vertical_alignment(iced::VerticalAlignment::Bottom)
                         .size(30)
                         .color(iced::Color::from_rgb(0.8, 0.0, 0.1))
                         .width(FillPortion(1)),
@@ -746,11 +748,15 @@ fn draw_input_image_stats<'a>(image: &InputImage) -> Column<'a, GuiEvent> {
 }
 
 fn draw_output_image_stats<'a>(
-    filepath: &str,
-    ppi: f64,
-    pixel_width: i32,
-    pixel_height: i32,
+    image: &InputImage,
+    repeat_x: f64,
+    repeat_y: f64,
+    dim_mm_x: f64,
+    dim_mm_y: f64,
 ) -> Column<'a, GuiEvent> {
+    let (output_image_pixel_width, output_image_pixel_height, png_output_filepath) =
+        image.output_image_pixel_width_height_filepath(repeat_x, repeat_y, dim_mm_x, dim_mm_y);
+    let ppi = image.ppi.unwrap_or(DEFAULT_PPI);
     let (ppi_label_color, ppi_label_size) = get_ppi_label_size_and_color(ppi);
 
     Column::new()
@@ -765,14 +771,17 @@ fn draw_output_image_stats<'a>(
                 .color(COLOR_DEFAULT),
         )
         .push(
-            Text::new(system::path_to_filename(&filepath))
+            Text::new(system::path_to_filename(&png_output_filepath))
                 .size(LABEL_SIZE_DEFAULT)
                 .color(COLOR_DEFAULT),
         )
         .push(
-            Text::new(format!("{}x{}", pixel_width, pixel_height))
-                .horizontal_alignment(iced::HorizontalAlignment::Left)
-                .size(LABEL_SIZE_DEFAULT),
+            Text::new(format!(
+                "{}x{}",
+                output_image_pixel_width, output_image_pixel_height
+            ))
+            .horizontal_alignment(iced::HorizontalAlignment::Left)
+            .size(LABEL_SIZE_DEFAULT),
         )
         .push(
             Text::new(format!("DPI: {}", ppi))
@@ -902,28 +911,16 @@ fn show_messagebox(caption: &str, message: &str, is_error: bool) {
     };
 }
 
-fn init_logging(logfile_path: &str, loglevel: log::LevelFilter) -> Result<(), String> {
-    let logfile = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .append(false)
-        .open(logfile_path)
-        .map_err(|error| format!("Could not create logfile at '{}' : {}", logfile_path, error))?;
-
-    fern::Dispatch::new()
-        .format(|out, message, record| out.finish(format_args!("{}: {}", record.level(), message)))
-        .level(loglevel)
-        .chain(std::io::stdout())
-        .chain(logfile)
-        .apply()
-        .map_err(|error| format!("Could initialize logger: {}", error))?;
-
-    Ok(())
-}
-
 fn main() {
-    let logfile_path = system::path_join(&get_executable_dir(), "logging.txt");
-    if let Err(error) = init_logging(&logfile_path, log::LevelFilter::Error) {
+    let logfile_path = {
+        let logfile_dir = system::get_appdata_dir(
+            main_launcher_info::LAUNCHER_COMPANY_NAME,
+            main_launcher_info::LAUNCHER_SAVE_FOLDER_NAME,
+        )
+        .unwrap_or(get_executable_dir());
+        system::path_join(&logfile_dir, "logging.txt")
+    };
+    if let Err(error) = ct_lib::init_logging(&logfile_path, log::LevelFilter::Info) {
         show_messagebox(
             main_launcher_info::LAUNCHER_WINDOW_TITLE,
             &format!("Logger initialization failed : {}", error,),
