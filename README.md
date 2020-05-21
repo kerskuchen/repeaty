@@ -1,5 +1,21 @@
 # Repeaty 
 
+A tool specialized for print that generates repeating pattern out of input images. It preserves DPI,
+ICC Profile, Chroma, Gamma and SRGB information of the original image in the output image.
+
+# Usage
+
+The easiest way to use Repeaty is to download the latest release from the 
+[release page](https://github.com/kerskuchen/repeaty/releases) and extract it to a directory 
+of our choice.
+
+![Example conversion output](example.png "Example conversion output")
+
+Additional example output can be found in the `examples` directory.
+
+# Limitations
+
+As of now Repeaty supports only `.png` files. 
 
 # Building it
 
