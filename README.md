@@ -1,7 +1,7 @@
 # Repeaty 
 ![Repeaty Logo](assets_executable/launcher_icon/64.png "Repeaty Logo") 
 
-A tool specialized for print that generates repeating pattern out of input images. It preserves DPI,
+A tool specialized for print that generates repeating patterns out of input images. It preserves DPI,
 ICC Profile, Chroma, Gamma and SRGB information of the original image in the output image.
 
 # Usage
