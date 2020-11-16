@@ -1615,7 +1615,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "launcher"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "ct_lib",
  "fern 0.6.0",
